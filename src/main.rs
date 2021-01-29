@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
                 None => format!("https://discord.com/api/channels/{}/messages", channel.id),
             };
 
-            let mut messages: Vec<Message> = get_json(&client, &message_path).await?;
+            let messages: Vec<Message> = get_json(&client, &message_path).await?;
 
             if messages.is_empty() {
                 continue;
@@ -62,12 +62,18 @@ async fn main() -> Result<()> {
             // now update timestamps
             last_message_ids.insert(channel.id.clone(), Some(messages.last().unwrap().id.clone()));
 
-            messages.retain(|m| !m.mentions.is_empty());
-
             for message in messages {
                 if !message.content.starts_with("!brick") {
                     continue;
                 }
+
+                // send error messeage
+                if message.mentions.is_empty() {
+                    // TODO
+                    let res = send_reply(&client, &channel.id, &message.id).await?;
+                    last_message_ids.insert(channel.id.clone(), Some(res.id.clone()));
+                }
+
                 for user in message.mentions {
                     if user.id == my_id {
                         let res = send_reply(&client, &channel.id, &message.id).await?;
