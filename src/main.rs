@@ -15,6 +15,9 @@ use tokio::time::sleep;
 mod structs;
 use structs::*;
 
+mod avatar_cache;
+use avatar_cache::AvatarCache;
+
 pub static TOKEN_HEADER: OnceCell<String> = OnceCell::new();
 
 #[tokio::main]
@@ -23,7 +26,7 @@ async fn main() -> Result<()> {
 
     let client = reqwest::Client::new();
     let mut last_message_ids = HashMap::new();
-    let mut avatars: HashMap<(String, String), Bytes> = HashMap::new();
+    let mut cache = AvatarCache::new();
 
     let my_id = get_json::<User>(&client, "https://discord.com/api/users/@me").await?.id;
 
@@ -43,6 +46,7 @@ async fn main() -> Result<()> {
     }
 
     loop {
+        // TODO Support reloading of channels
         for channel in &channels {
             let message_path = match &last_message_ids[&channel.id] {
                 Some(timestamp) => format!("https://discord.com/api/channels/{}/messages?after={}", channel.id, timestamp),
@@ -71,18 +75,10 @@ async fn main() -> Result<()> {
                         continue;
                     }
 
-                    if !avatars.contains_key(&(user.id.clone(), user.avatar.clone())) {
-                        println!("{} -  {}", user.username, user.get_avatar_url());
-
-                        let image = client.get(&user.get_avatar_url()).send().await?.bytes().await?;
-
-                        avatars.insert((user.id.clone(), user.avatar.clone()), image);
-                    }
-
-                    println!("sending avatar... - {}, {}", channel.name, user.username);
+                    let image = cache.get(&client, &user).await?;
 
                     //send avatar for now
-                    let image_res = send_image(&client, &channel.id, avatars.get(&(user.id, user.avatar)).unwrap()).await?;
+                    let image_res = send_image(&client, &channel.id, image).await?;
 
                     last_message_ids.insert(channel.id.clone(), Some(image_res.id.clone()));
                 }
@@ -145,7 +141,7 @@ async fn send_reply(client: &Client, channel_id: &str, reply_id: &str) -> Result
 }
 
 #[derive(Error, Debug)]
-enum BotError {
+pub enum BotError {
     #[error(transparent)]
     ReqwestError(#[from] reqwest::Error),
     #[error(transparent)]
