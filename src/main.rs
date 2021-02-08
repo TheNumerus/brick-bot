@@ -10,7 +10,7 @@ use reqwest::{
 use serde::de::DeserializeOwned;
 use serde_json::json;
 use thiserror::Error;
-use tokio::time::sleep;
+use tokio::{fs::File, time::sleep};
 
 mod structs;
 use structs::*;
@@ -18,7 +18,10 @@ use structs::*;
 mod avatar_cache;
 use avatar_cache::AvatarCache;
 
+mod image_edit;
+
 pub static TOKEN_HEADER: OnceCell<String> = OnceCell::new();
+pub static BRICK_GIF: OnceCell<Vec<u8>> = OnceCell::new();
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -27,6 +30,8 @@ async fn main() -> Result<()> {
     let client = reqwest::Client::new();
     let mut last_message_ids = HashMap::new();
     let mut cache = AvatarCache::new();
+
+    BRICK_GIF.set(tokio::fs::read("tenor.gif").await?).unwrap();
 
     let my_id = get_json::<User>(&client, "https://discord.com/api/users/@me").await?.id;
 
@@ -81,10 +86,12 @@ async fn main() -> Result<()> {
                         continue;
                     }
 
-                    let image = cache.get(&client, &user).await?;
+                    let avatar = cache.get(&client, &user).await?;
+
+                    let image = image_edit::brickify_gif(avatar).await?;
 
                     //send avatar for now
-                    let image_res = send_image(&client, &channel.id, image).await?;
+                    let image_res = send_image(&client, &channel.id, &image).await?;
 
                     last_message_ids.insert(channel.id.clone(), Some(image_res.id.clone()));
                 }
@@ -110,7 +117,7 @@ async fn send_image(client: &Client, channel_id: &str, image: &Bytes) -> Result<
 
     let image_bytes = image.as_ref().to_owned();
 
-    let file_part = Part::bytes(image_bytes).file_name("brick_that_fucker.png");
+    let file_part = Part::bytes(image_bytes).file_name("brick_that_fucker.gif");
 
     let form = Form::new().part("file", file_part);
 
@@ -152,6 +159,8 @@ pub enum BotError {
     ReqwestError(#[from] reqwest::Error),
     #[error(transparent)]
     SerdeError(#[from] serde_json::Error),
+    #[error(transparent)]
+    ImageError(#[from] image::error::ImageError),
     #[error("Internal Error")]
     InternalError,
 }
