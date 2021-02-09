@@ -10,13 +10,16 @@ use reqwest::{
 use serde::de::DeserializeOwned;
 use serde_json::json;
 use thiserror::Error;
-use tokio::{fs::File, time::sleep};
+use tokio::time::sleep;
 
 mod structs;
 use structs::*;
 
 mod avatar_cache;
 use avatar_cache::AvatarCache;
+
+mod config;
+use config::Config;
 
 mod image_edit;
 
@@ -25,13 +28,16 @@ pub static BRICK_GIF: OnceCell<Vec<u8>> = OnceCell::new();
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    set_token()?;
+    let config = tokio::fs::read_to_string("bot.toml").await.context("Error loading bot configuration.")?;
+    let config: Config = toml::from_str(&config).context("Could not parse settings")?;
+
+    set_token(&config.token)?;
 
     let client = reqwest::Client::new();
     let mut last_message_ids = HashMap::new();
     let mut cache = AvatarCache::new();
 
-    BRICK_GIF.set(tokio::fs::read("tenor.gif").await?).unwrap();
+    BRICK_GIF.set(tokio::fs::read(config.image_path).await?).unwrap();
 
     let my_id = get_json::<User>(&client, "https://discord.com/api/users/@me").await?.id;
 
@@ -74,16 +80,37 @@ async fn main() -> Result<()> {
 
                 // send error messeage
                 if message.mentions.is_empty() {
-                    // TODO
-                    let res = send_reply(&client, &channel.id, &message.id).await?;
-                    last_message_ids.insert(channel.id.clone(), Some(res.id.clone()));
+                    match message.mention_roles {
+                        Some(roles) if !roles.is_empty() => {
+                            let res = send_reply(
+                                &client,
+                                &channel.id,
+                                &message.id,
+                                &config.err_msg_tag_role.clone().unwrap_or_else(|| String::from("Error, tag user, not role")),
+                            )
+                            .await?;
+                            last_message_ids.insert(channel.id.clone(), Some(res.id.clone()));
+                        }
+                        _ => {
+                            let res = send_reply(
+                                &client,
+                                &channel.id,
+                                &message.id,
+                                &config.err_msg_tag_nobody.clone().unwrap_or_else(|| String::from("Error, tag user")),
+                            )
+                            .await?;
+                            last_message_ids.insert(channel.id.clone(), Some(res.id.clone()));
+                        }
+                    }
                 }
 
                 for user in message.mentions {
                     if user.id == my_id {
-                        let res = send_reply(&client, &channel.id, &message.id).await?;
-                        last_message_ids.insert(channel.id.clone(), Some(res.id.clone()));
-                        continue;
+                        if let Some(ref self_message) = config.self_brick_message {
+                            let res = send_reply(&client, &channel.id, &message.id, self_message).await?;
+                            last_message_ids.insert(channel.id.clone(), Some(res.id.clone()));
+                            continue;
+                        }
                     }
 
                     let avatar = cache.get(&client, &user).await?;
@@ -112,6 +139,19 @@ async fn get_json<T: DeserializeOwned>(client: &Client, path: &str) -> Result<T,
         .map_err(|e| e.into())
 }
 
+/// Mainly used for development
+#[allow(dead_code)]
+async fn get_text(client: &Client, path: &str) -> Result<String, BotError> {
+    client
+        .get(path)
+        .header("Authorization", TOKEN_HEADER.get().ok_or(BotError::InternalError)?)
+        .send()
+        .await?
+        .text()
+        .await
+        .map_err(|e| e.into())
+}
+
 async fn send_image(client: &Client, channel_id: &str, image: &Bytes) -> Result<Message, BotError> {
     let url = format!("https://discord.com/api/channels/{}/messages", channel_id);
 
@@ -132,11 +172,11 @@ async fn send_image(client: &Client, channel_id: &str, image: &Bytes) -> Result<
         .map_err(|e| e.into())
 }
 
-async fn send_reply(client: &Client, channel_id: &str, reply_id: &str) -> Result<Message, BotError> {
+async fn send_reply(client: &Client, channel_id: &str, reply_id: &str, reply: &str) -> Result<Message, BotError> {
     let url = format!("https://discord.com/api/channels/{}/messages", channel_id);
 
     let json = json!({
-        "content": "good try fucker",
+        "content": reply,
         "message_reference": {
             "message_id": reply_id
          }
@@ -165,8 +205,7 @@ pub enum BotError {
     InternalError,
 }
 
-fn set_token() -> Result<()> {
-    let token = std::env::var("BRICKBOTTOKEN").context("Cannot find BRICKBOTTOKEN in environment")?;
+fn set_token(token: &str) -> Result<()> {
     TOKEN_HEADER.set(format!("Bot {}", token)).unwrap();
     Ok(())
 }

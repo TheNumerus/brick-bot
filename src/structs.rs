@@ -33,6 +33,7 @@ pub struct Message {
     pub id: String,
     pub content: String,
     pub mentions: Vec<User>,
+    pub mention_roles: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, Debug)]
