@@ -1,2 +1,4 @@
 token = "TOKEN HERE"
 self_brick_message = "Nice try"
+image_path = "../brick.gif"
+command = "!brick"

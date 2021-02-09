@@ -8,4 +8,6 @@ pub struct Config {
     pub image_path: PathBuf,
     pub err_msg_tag_role: Option<String>,
     pub err_msg_tag_nobody: Option<String>,
+    pub use_avatar_alpha: Option<bool>,
+    pub command: String,
 }

@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
     let mut last_message_ids = HashMap::new();
     let mut cache = AvatarCache::new();
 
-    BRICK_GIF.set(tokio::fs::read(config.image_path).await?).unwrap();
+    BRICK_GIF.set(tokio::fs::read(&config.image_path).await?).unwrap();
 
     let my_id = get_json::<User>(&client, "https://discord.com/api/users/@me").await?.id;
 
@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
             last_message_ids.insert(channel.id.clone(), Some(messages.last().unwrap().id.clone()));
 
             for message in messages {
-                if !message.content.starts_with("!brick") {
+                if !message.content.starts_with(&config.command) {
                     continue;
                 }
 
@@ -115,7 +115,7 @@ async fn main() -> Result<()> {
 
                     let avatar = cache.get(&client, &user).await?;
 
-                    let image = image_edit::brickify_gif(avatar).await?;
+                    let image = image_edit::brickify_gif(avatar, &config).await?;
 
                     //send avatar for now
                     let image_res = send_image(&client, &channel.id, &image).await?;
