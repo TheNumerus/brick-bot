@@ -123,7 +123,7 @@ async fn main() -> Result<()> {
                     let image = image_edit::brickify_gif(avatar, &config).await?;
 
                     //send avatar for now
-                    let image_res: DiscordResult<Message> = send_image(&client, &channel.id, &image).await?;
+                    let image_res: DiscordResult<Message> = send_image(&client, &channel.id, &image, &config).await?;
                     let image_res = Result::from(image_res)?;
 
                     last_message_ids.insert(channel.id.clone(), Some(image_res.id.clone()));
@@ -158,12 +158,12 @@ async fn get_text(client: &Client, path: &str) -> Result<String, BotError> {
         .map_err(|e| e.into())
 }
 
-async fn send_image(client: &Client, channel_id: &str, image: &Bytes) -> Result<DiscordResult<Message>, BotError> {
+async fn send_image(client: &Client, channel_id: &str, image: &Bytes, config: &Config) -> Result<DiscordResult<Message>, BotError> {
     let url = format!("https://discord.com/api/channels/{}/messages", channel_id);
 
     let image_bytes = image.as_ref().to_owned();
 
-    let file_part = Part::bytes(image_bytes).file_name("brick_that_fucker.gif");
+    let file_part = Part::bytes(image_bytes).file_name(config.image_name.clone().unwrap_or_else(|| String::from("brick.gif")));
 
     let form = Form::new().part("file", file_part);
 

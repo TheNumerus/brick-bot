@@ -10,4 +10,5 @@ pub struct Config {
     pub err_msg_tag_nobody: Option<String>,
     pub use_avatar_alpha: Option<bool>,
     pub command: String,
+    pub image_name: Option<String>,
 }
