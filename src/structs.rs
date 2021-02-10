@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use serde_repr::*;
 
+use crate::BotError;
+
 #[derive(Deserialize, Debug)]
 pub struct GuildInfo {
     pub id: String,
@@ -46,5 +48,21 @@ pub struct User {
 impl User {
     pub fn get_avatar_url(&self) -> String {
         format!("https://cdn.discordapp.com/avatars/{}/{}.png", self.id, self.avatar)
+    }
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(untagged)]
+pub enum DiscordResult<T> {
+    Ok(T),
+    Error { message: String, code: usize },
+}
+
+impl<T> From<DiscordResult<T>> for Result<T, BotError> {
+    fn from(dr: DiscordResult<T>) -> Self {
+        match dr {
+            DiscordResult::Ok(val) => Ok(val),
+            DiscordResult::Error { message, code } => Err(BotError::ApiError(format!("Error #{}, {}", code, message))),
+        }
     }
 }

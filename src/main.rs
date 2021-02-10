@@ -39,16 +39,20 @@ async fn main() -> Result<()> {
 
     BRICK_GIF.set(tokio::fs::read(&config.image_path).await?).unwrap();
 
-    let my_id = get_json::<User>(&client, "https://discord.com/api/users/@me").await?.id;
+    let me: DiscordResult<User> = get_json(&client, "https://discord.com/api/users/@me").await?;
+    let my_id = Result::from(me)?.id;
 
-    let guilds: Vec<GuildInfo> = get_json(&client, "https://discord.com/api/users/@me/guilds").await?;
+    let guilds: DiscordResult<Vec<GuildInfo>> = get_json(&client, "https://discord.com/api/users/@me/guilds").await?;
+    let guilds = Result::from(guilds)?;
 
     if guilds.is_empty() {
-        bail!("Bot is not in any channel");
+        bail!("Bot is not in any guild");
     }
 
     let channels_path = format!("https://discord.com/api/guilds/{}/channels", guilds[0].id);
-    let mut channels: Vec<Channel> = get_json(&client, &channels_path).await?;
+    let channels: DiscordResult<Vec<Channel>> = get_json(&client, &channels_path).await?;
+    let mut channels = Result::from(channels)?;
+
     channels.retain(|c| c.channel_type == ChannelType::GuildText);
 
     //init last message ids
@@ -64,7 +68,8 @@ async fn main() -> Result<()> {
                 None => format!("https://discord.com/api/channels/{}/messages", channel.id),
             };
 
-            let messages: Vec<Message> = get_json(&client, &message_path).await?;
+            let messages: DiscordResult<Vec<Message>> = get_json(&client, &message_path).await?;
+            let messages = Result::from(messages)?;
 
             if messages.is_empty() {
                 continue;
@@ -118,7 +123,8 @@ async fn main() -> Result<()> {
                     let image = image_edit::brickify_gif(avatar, &config).await?;
 
                     //send avatar for now
-                    let image_res = send_image(&client, &channel.id, &image).await?;
+                    let image_res: DiscordResult<Message> = send_image(&client, &channel.id, &image).await?;
+                    let image_res = Result::from(image_res)?;
 
                     last_message_ids.insert(channel.id.clone(), Some(image_res.id.clone()));
                 }
@@ -128,13 +134,13 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn get_json<T: DeserializeOwned>(client: &Client, path: &str) -> Result<T, BotError> {
+async fn get_json<T: DeserializeOwned>(client: &Client, path: &str) -> Result<DiscordResult<T>, BotError> {
     client
         .get(path)
         .header("Authorization", TOKEN_HEADER.get().ok_or(BotError::InternalError)?)
         .send()
         .await?
-        .json::<T>()
+        .json::<DiscordResult<T>>()
         .await
         .map_err(|e| e.into())
 }
@@ -152,7 +158,7 @@ async fn get_text(client: &Client, path: &str) -> Result<String, BotError> {
         .map_err(|e| e.into())
 }
 
-async fn send_image(client: &Client, channel_id: &str, image: &Bytes) -> Result<Message, BotError> {
+async fn send_image(client: &Client, channel_id: &str, image: &Bytes) -> Result<DiscordResult<Message>, BotError> {
     let url = format!("https://discord.com/api/channels/{}/messages", channel_id);
 
     let image_bytes = image.as_ref().to_owned();
@@ -167,7 +173,7 @@ async fn send_image(client: &Client, channel_id: &str, image: &Bytes) -> Result<
         .multipart(form)
         .send()
         .await?
-        .json::<Message>()
+        .json::<DiscordResult<Message>>()
         .await
         .map_err(|e| e.into())
 }
@@ -203,6 +209,8 @@ pub enum BotError {
     ImageError(#[from] image::error::ImageError),
     #[error("Internal Error")]
     InternalError,
+    #[error("Api Error: `{0}`")]
+    ApiError(String),
 }
 
 fn set_token(token: &str) -> Result<()> {
