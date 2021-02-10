@@ -1,7 +1,7 @@
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct Config {
     pub token: String,
     pub self_brick_message: Option<String>,
@@ -11,4 +11,13 @@ pub struct Config {
     pub use_avatar_alpha: Option<bool>,
     pub command: String,
     pub image_name: Option<String>,
+    pub keyframes: HashMap<String, Keyframe>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct Keyframe {
+    pub x: u32,
+    pub y: u32,
+    pub scale: Option<f32>,
+    pub visible: Option<bool>,
 }
