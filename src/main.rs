@@ -1,7 +1,8 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, fmt::Display, time::Duration};
 
 use anyhow::{bail, Context, Result};
 use bytes::Bytes;
+use chrono::Utc;
 use once_cell::sync::OnceCell;
 use reqwest::{
     multipart::{Form, Part},
@@ -42,8 +43,12 @@ async fn main() -> Result<()> {
     let me: DiscordResult<User> = get_json(&client, "https://discord.com/api/users/@me").await?;
     let my_id = Result::from(me)?.id;
 
+    log_message("Got self info");
+
     let guilds: DiscordResult<Vec<GuildInfo>> = get_json(&client, "https://discord.com/api/users/@me/guilds").await?;
     let guilds = Result::from(guilds)?;
+
+    log_message("Got guild info");
 
     if guilds.is_empty() {
         bail!("Bot is not in any guild");
@@ -51,6 +56,9 @@ async fn main() -> Result<()> {
 
     let channels_path = format!("https://discord.com/api/guilds/{}/channels", guilds[0].id);
     let channels: DiscordResult<Vec<Channel>> = get_json(&client, &channels_path).await?;
+
+    log_message("Got channel info");
+
     let mut channels = Result::from(channels)?;
 
     channels.retain(|c| c.channel_type == ChannelType::GuildText);
@@ -94,6 +102,7 @@ async fn main() -> Result<()> {
                                 &config.err_msg_tag_role.clone().unwrap_or_else(|| String::from("Error, tag user, not role")),
                             )
                             .await?;
+                            log_message("Error - tagged role");
                             last_message_ids.insert(channel.id.clone(), Some(res.id.clone()));
                         }
                         _ => {
@@ -104,6 +113,7 @@ async fn main() -> Result<()> {
                                 &config.err_msg_tag_nobody.clone().unwrap_or_else(|| String::from("Error, tag user")),
                             )
                             .await?;
+                            log_message("Error - tagged nobody");
                             last_message_ids.insert(channel.id.clone(), Some(res.id.clone()));
                         }
                     }
@@ -114,6 +124,7 @@ async fn main() -> Result<()> {
                         if let Some(ref self_message) = config.self_brick_message {
                             let res = send_reply(&client, &channel.id, &message.id, self_message).await?;
                             last_message_ids.insert(channel.id.clone(), Some(res.id.clone()));
+                            log_message(format!("Bricked self"));
                             continue;
                         }
                     }
@@ -125,6 +136,8 @@ async fn main() -> Result<()> {
                     //send avatar for now
                     let image_res: DiscordResult<Message> = send_image(&client, &channel.id, &image, &config).await?;
                     let image_res = Result::from(image_res)?;
+
+                    log_message(format!("Bricked user \"{}\"", user.username));
 
                     last_message_ids.insert(channel.id.clone(), Some(image_res.id.clone()));
                 }
@@ -216,4 +229,12 @@ pub enum BotError {
 fn set_token(token: &str) -> Result<()> {
     TOKEN_HEADER.set(format!("Bot {}", token)).unwrap();
     Ok(())
+}
+
+fn log_message<T: AsRef<str> + Display>(message: T) {
+    let time = Utc::now();
+
+    let formated_time = time.format("%F %T");
+
+    println!("[{}] - {}", formated_time, message);
 }

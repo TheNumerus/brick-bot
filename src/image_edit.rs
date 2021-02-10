@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use image::{codecs::gif::*, AnimationDecoder, GenericImageView, ImageFormat};
 
@@ -11,8 +9,6 @@ pub async fn brickify_gif(avatar: &Bytes, config: &Config) -> Result<Bytes, BotE
     let avatar = image::load_from_memory_with_format(avatar.as_ref(), ImageFormat::Png)?;
 
     let (max_x, max_y) = avatar.dimensions();
-
-    let timer = Instant::now();
 
     let decoder = GifDecoder::new(source.get().unwrap().reader()).unwrap();
 
@@ -55,8 +51,6 @@ pub async fn brickify_gif(avatar: &Bytes, config: &Config) -> Result<Bytes, BotE
         encoder.set_repeat(Repeat::Infinite)?;
         encoder.encode_frames(frames.into_iter())?;
     }
-
-    println!("Re-encode time: {}", timer.elapsed().as_secs_f32());
 
     Ok(writer.into_inner().freeze())
 }
