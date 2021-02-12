@@ -38,7 +38,9 @@ async fn main() -> Result<()> {
     let mut last_message_ids = HashMap::new();
     let mut cache = AvatarCache::new();
 
-    BRICK_GIF.set(tokio::fs::read(&config.image_path).await?).unwrap();
+    BRICK_GIF
+        .set(tokio::fs::read(&config.image_path).await.context("cannot find image on given path")?)
+        .unwrap();
 
     let me: DiscordResult<User> = get_json(&client, "https://discord.com/api/users/@me").await?;
     let my_id = Result::from(me)?.id;

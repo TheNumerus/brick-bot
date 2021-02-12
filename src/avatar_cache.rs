@@ -20,9 +20,13 @@ impl AvatarCache {
     pub async fn get(&mut self, client: &Client, user: &User) -> Result<&Bytes, BotError> {
         let key = (user.id.clone(), user.avatar.clone());
 
-        Ok(self
-            .storage
-            .entry(key)
-            .or_insert(client.get(&user.get_avatar_url()).send().await?.bytes().await?))
+        if let None = self.storage.get(&key) {
+            // get avatar only if none in cache
+            let avatar = client.get(&user.get_avatar_url()).send().await?.bytes().await?;
+            self.storage.insert(key.clone(), avatar);
+        }
+
+        // can unwrap now
+        Ok(self.storage.get(&key).unwrap())
     }
 }
