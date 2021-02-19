@@ -10,19 +10,13 @@ use reqwest::{
 };
 use serde::de::DeserializeOwned;
 use serde_json::json;
-use thiserror::Error;
 use tokio::time::sleep;
 
-mod structs;
-use structs::*;
-
-mod avatar_cache;
-use avatar_cache::AvatarCache;
-
-mod config;
-use config::Config;
-
-mod image_edit;
+use brick_bot::avatar_cache::AvatarCache;
+use brick_bot::config::Config;
+use brick_bot::error::BotError;
+use brick_bot::image_edit;
+use brick_bot::structs::*;
 
 pub static TOKEN_HEADER: OnceCell<String> = OnceCell::new();
 pub static BRICK_GIF: OnceCell<Vec<u8>> = OnceCell::new();
@@ -126,7 +120,7 @@ async fn main() -> Result<()> {
 
                     let avatar = cache.get(&client, &user).await?;
 
-                    let image = image_edit::brickify_gif(avatar, &config).await?;
+                    let image = image_edit::brickify_gif(BRICK_GIF.get().unwrap(), avatar, &config).await?;
 
                     //send avatar for now
                     let image_res: DiscordResult<Message> = send_image(&client, &channel.id, &image, &config).await?;
@@ -205,20 +199,6 @@ async fn send_reply(client: &Client, channel_id: &str, reply_id: &str, reply: &s
         .json::<Message>()
         .await
         .map_err(|e| e.into())
-}
-
-#[derive(Error, Debug)]
-pub enum BotError {
-    #[error(transparent)]
-    ReqwestError(#[from] reqwest::Error),
-    #[error(transparent)]
-    SerdeError(#[from] serde_json::Error),
-    #[error(transparent)]
-    ImageError(#[from] image::error::ImageError),
-    #[error("Internal Error")]
-    InternalError,
-    #[error("Api Error: `{0}`")]
-    ApiError(String),
 }
 
 fn set_token(token: &str) -> Result<()> {

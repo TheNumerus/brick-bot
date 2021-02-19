@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use serde_repr::*;
 
-use crate::BotError;
+use crate::error::BotError;
 
 #[derive(Deserialize, Debug)]
 pub struct GuildInfo {
@@ -33,6 +33,7 @@ pub enum ChannelType {
 #[derive(Deserialize, Debug)]
 pub struct Message {
     pub id: String,
+    pub channel_id: String,
     pub content: String,
     pub mentions: Vec<User>,
     pub mention_roles: Option<Vec<String>>,
