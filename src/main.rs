@@ -38,6 +38,9 @@ async fn main() -> Result<()> {
     let mut last_message_ids = HashMap::new();
     let mut cache = AvatarCache::new();
 
+    let gateway: DiscordResult<serde_json::Value> = get_json(&client, "https://discord.com/api/gateway").await?;
+    println!("{:#?}", gateway);
+
     BRICK_GIF
         .set(tokio::fs::read(&config.image_path).await.context("cannot find image on given path")?)
         .unwrap();
