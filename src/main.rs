@@ -31,6 +31,8 @@ pub static BRICK_GIF: OnceCell<Vec<u8>> = OnceCell::new();
 async fn main() -> Result<()> {
     let config = tokio::fs::read_to_string("bot.toml").await.context("Error loading bot configuration.")?;
     let config: Config = toml::from_str(&config).context("Could not parse settings")?;
+    // It's safe to unwrap string options now
+    let config = config.set_missing();
 
     set_token(&config.token)?;
 
@@ -95,24 +97,12 @@ async fn main() -> Result<()> {
                 if message.mentions.is_empty() {
                     match message.mention_roles {
                         Some(roles) if !roles.is_empty() => {
-                            let res = send_reply(
-                                &client,
-                                &channel.id,
-                                &message.id,
-                                &config.err_msg_tag_role.clone().unwrap_or_else(|| String::from("Error, tag user, not role")),
-                            )
-                            .await?;
+                            let res = send_reply(&client, &channel.id, &message.id, &config.err_msg_tag_role.clone().unwrap()).await?;
                             log_message("Error - tagged role");
                             last_message_ids.insert(channel.id.clone(), Some(res.id.clone()));
                         }
                         _ => {
-                            let res = send_reply(
-                                &client,
-                                &channel.id,
-                                &message.id,
-                                &config.err_msg_tag_nobody.clone().unwrap_or_else(|| String::from("Error, tag user")),
-                            )
-                            .await?;
+                            let res = send_reply(&client, &channel.id, &message.id, &config.err_msg_tag_nobody.clone().unwrap()).await?;
                             log_message("Error - tagged nobody");
                             last_message_ids.insert(channel.id.clone(), Some(res.id.clone()));
                         }
@@ -176,7 +166,7 @@ async fn send_image(client: &Client, channel_id: &str, image: &Bytes, config: &C
 
     let image_bytes = image.as_ref().to_owned();
 
-    let file_part = Part::bytes(image_bytes).file_name(config.image_name.clone().unwrap_or_else(|| String::from("brick.gif")));
+    let file_part = Part::bytes(image_bytes).file_name(config.image_name.clone().unwrap());
 
     let form = Form::new().part("file", file_part);
 

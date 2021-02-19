@@ -14,6 +14,18 @@ pub struct Config {
     pub keyframes: HashMap<String, Keyframe>,
 }
 
+impl Config {
+    pub fn set_missing(self) -> Self {
+        Self {
+            err_msg_tag_role: self.err_msg_tag_role.or(Some(String::from("Error, tag user, not role"))),
+            err_msg_tag_nobody: self.err_msg_tag_nobody.or(Some(String::from("Error, tag user"))),
+            image_name: self.image_name.or(Some(String::from("brick.gif"))),
+            use_avatar_alpha: self.use_avatar_alpha.or(Some(true)),
+            ..self
+        }
+    }
+}
+
 #[derive(Deserialize, Debug)]
 pub struct Keyframe {
     pub x: u32,
