@@ -95,10 +95,17 @@ async fn main() -> Result<()> {
             let sequence_number = Arc::clone(&sequence_number);
 
             tokio::spawn(async move {
-                println!("{:#?}", message);
+                // return if close connection
+                if let Ok(msg) = &message {
+                    if let Message::Close(_) = msg {
+                        return Ok(());
+                    }
+                }
+
+                //println!("{:#?}", message);
                 let msg = message.unwrap().to_string();
                 let payload: Payload = serde_json::from_str(&msg).unwrap();
-                println!("{:#?}", payload);
+                //println!("{:#?}", payload);
                 if payload.op == Opcode::Hello {
                     let heartbeat = payload.d.unwrap()["heartbeat_interval"].as_u64().unwrap();
                     // TODO not handling reconnections for now
@@ -110,7 +117,6 @@ async fn main() -> Result<()> {
                                 "d": seq_num.load(Ordering::SeqCst)
                             });
                             tx.send(Message::text(hb_message.to_string()))?;
-                            println!("sent heartbeat");
                             sleep(Duration::from_millis(heartbeat)).await;
                         }
                     }));
