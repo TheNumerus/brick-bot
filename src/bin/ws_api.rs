@@ -14,9 +14,8 @@ use reqwest::{
     multipart::{Form, Part},
     Client,
 };
-use serde_repr::*;
 
-use serde::{de::DeserializeOwned, Deserialize};
+use serde::de::DeserializeOwned;
 
 use anyhow::{Context, Result};
 
@@ -37,7 +36,7 @@ use brick_bot::{
     config::Config,
     error::BotError,
     image_edit::brickify_gif,
-    structs::{DiscordResult, Message as DiscordMessage, User},
+    structs::{DiscordResult, Message as DiscordMessage, Opcode, Payload, User},
 };
 
 pub static TOKEN_HEADER: OnceCell<String> = OnceCell::new();
@@ -73,8 +72,9 @@ async fn main() -> Result<()> {
 
         let sender = tokio::spawn(async move {
             while let Some(m) = rx.recv().await {
-                write.send(m).await;
+                write.send(m).await?;
             }
+            Ok::<(), tokio_tungstenite::tungstenite::error::Error>(())
         });
 
         let identified = Arc::new(AtomicBool::from(false));
@@ -219,8 +219,14 @@ async fn main() -> Result<()> {
             Ok::<(), BotError>(())
         });
 
-        // TODO this feels wrong
-        tokio::try_join! {sender, ws_to_stdout};
+        let join_res = tokio::try_join! {sender, ws_to_stdout};
+
+        match join_res {
+            Ok(_) => log_message("Another connection iteration"),
+            Err(e) => {
+                log_message(format!("Error {:#?}", e));
+            }
+        }
     }
 }
 
@@ -286,45 +292,6 @@ async fn prepare_config() -> Result<Arc<Config>> {
     Ok(Arc::from(config.set_missing()))
 }
 
-// TODO move
-#[derive(Debug, Deserialize)]
-struct Payload<T = serde_json::Value> {
-    op: Opcode,
-    d: Option<T>,
-    s: Option<usize>,
-    t: Option<String>,
-}
-
-// TODO move
-/// All gateway events in Discord are tagged with an opcode that denotes the payload type.
-/// Your connection to our gateway may also sometimes close.
-/// When it does, you will receive a close code that tells you what happened.
-#[derive(Debug, Deserialize_repr, Clone, PartialEq, Serialize_repr)]
-#[repr(u16)]
-enum Opcode {
-    /// An event was dispatched.
-    Dispatch = 0,
-    /// Fired periodically by the client to keep the connection alive.
-    Heartbeat = 1,
-    /// Starts a new session during the initial handshake.
-    Identify = 2,
-    /// Update the client's presence.
-    PresenceUpdate = 3,
-    /// Used to join/leave or move between voice channels.
-    VoiceStateUpdate = 4,
-    /// Resume a previous session that was disconnected.
-    Resume = 6,
-    /// You should attempt to reconnect and resume immediately.
-    Reconnect = 7,
-    /// Request information about offline guild members in a large guild.
-    RequestGuildMembers = 8,
-    /// The session has been invalidated. You should reconnect and identify/resume accordingly.
-    InvalidSession = 9,
-    /// Sent immediately after connecting, contains the heartbeat_interval to use.
-    Hello = 10,
-    /// Sent in response to receiving a heartbeat to acknowledge that it has been received.
-    HeartbeatAck = 11,
-}
 // TODO move these too
 
 async fn get_json<T: DeserializeOwned>(client: &Client, path: &str) -> Result<DiscordResult<T>, BotError> {
