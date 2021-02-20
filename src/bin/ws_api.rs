@@ -1,7 +1,7 @@
 use std::{
     fmt::Display,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
     time::Duration,
@@ -23,7 +23,7 @@ use anyhow::{Context, Result};
 
 use futures_util::StreamExt;
 use serde_json::json;
-use tokio::time::sleep;
+use tokio::{task::JoinHandle, time::sleep};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 
 use brick_bot::{
@@ -50,8 +50,8 @@ async fn main() -> Result<()> {
 
     set_token(&config.token)?;
 
-    let identified = Arc::from(AtomicBool::from(false));
-
+    let identified = Arc::new(AtomicBool::from(false));
+    let sequence_number = Arc::new(AtomicUsize::from(0));
     BRICK_GIF
         .set(tokio::fs::read(&config.image_path).await.context("cannot find image on given path")?)
         .unwrap();
@@ -73,6 +73,8 @@ async fn main() -> Result<()> {
 
     let config_clone = config.clone();
     let ws_to_stdout = tokio::spawn(async move {
+        // TODO use option
+        let mut session_id = String::from("");
         loop {
             let tx = tx.clone();
             match read.next().await {
@@ -84,11 +86,12 @@ async fn main() -> Result<()> {
                     if payload.op == Opcode::Hello {
                         let heartbeat = payload.d.unwrap()["heartbeat_interval"].as_u64().unwrap();
                         // TODO not handling reconnections for now
+                        let seq_num = Arc::clone(&sequence_number);
                         let heartbeater = tokio::spawn(async move {
                             loop {
                                 let hb_message = json! ({
                                     "op": Opcode::Heartbeat,
-                                    "d": 0
+                                    "d": seq_num.load(Ordering::SeqCst)
                                 });
                                 tx.unbounded_send(Message::text(hb_message.to_string()))?;
                                 println!("sent heartbeat");
@@ -126,6 +129,8 @@ async fn main() -> Result<()> {
                             identified.store(true, Ordering::SeqCst);
                         }
                     } else if payload.op == Opcode::Dispatch {
+                        let s = payload.s.to_owned().unwrap();
+                        sequence_number.store(s, Ordering::SeqCst);
                         if let Some(event) = payload.t {
                             if event == "MESSAGE_CREATE" {
                                 let message: DiscordMessage = serde_json::from_value(payload.d.unwrap()).unwrap();
@@ -138,15 +143,14 @@ async fn main() -> Result<()> {
                                 if message.mentions.is_empty() {
                                     match message.mention_roles {
                                         Some(roles) if !roles.is_empty() => {
-                                            let res = send_reply(&client, &message.channel_id, &message.id, &config.err_msg_tag_role.clone().unwrap())
-                                                .await
-                                                .unwrap();
+                                            let res = send_reply(&client, &message.channel_id, &message.id, &config.err_msg_tag_role.clone().unwrap()).await?;
+                                            Result::from(res)?;
                                             log_message("Error - tagged role");
                                         }
                                         _ => {
-                                            let res = send_reply(&client, &message.channel_id, &message.id, &config.err_msg_tag_nobody.clone().unwrap())
-                                                .await
-                                                .unwrap();
+                                            let res =
+                                                send_reply(&client, &message.channel_id, &message.id, &config.err_msg_tag_nobody.clone().unwrap()).await?;
+                                            Result::from(res)?;
                                             log_message("Error - tagged nobody");
                                         }
                                     }
@@ -155,24 +159,67 @@ async fn main() -> Result<()> {
                                 for user in message.mentions {
                                     if user.id == my_id {
                                         if let Some(ref self_message) = config.self_brick_message {
-                                            let res = send_reply(&client, &message.channel_id, &message.id, self_message).await.unwrap();
+                                            send_reply(&client, &message.channel_id, &message.id, self_message).await?;
                                             log_message(format!("Bricked self"));
                                             continue;
                                         }
                                     }
 
-                                    let avatar = cache.get(&client, &user).await.unwrap();
+                                    let avatar = cache.get(&client, &user).await?;
 
-                                    let image = brickify_gif(BRICK_GIF.get().unwrap(), avatar, &config).await.unwrap();
+                                    let image = brickify_gif(BRICK_GIF.get().unwrap(), avatar, &config).await?;
 
-                                    //send avatar for now
-                                    let image_res: DiscordResult<DiscordMessage> = send_image(&client, &message.channel_id, &image, &config).await.unwrap();
-                                    let image_res = Result::from(image_res).unwrap();
+                                    let image_res: DiscordResult<DiscordMessage> = send_image(&client, &message.channel_id, &image, &config).await?;
+                                    Result::from(image_res)?;
 
                                     log_message(format!("Bricked user \"{}\"", user.username));
                                 }
+                            } else if event == "READY" {
+                                // TODO cleanup
+                                session_id = payload.d.clone().unwrap()["session_id"].as_str().unwrap().to_owned();
                             }
                         }
+                    } else if payload.op == Opcode::InvalidSession {
+                        // TODO dedup code
+                        // TODO add activity to config
+                        let identify = json!({
+                            "op": Opcode::Identify,
+                            "d": {
+                                "token": &config_clone.token,
+                                "intents": 512,
+                                "properties": {
+                                    "$os": "windows",
+                                    "$browser": "brick-bot",
+                                    "$device": "brick-bot"
+                                },
+                                "presence": {
+                                    "activities": [{
+                                        "name": "Brickity brick 🧱",
+                                        "type": 0
+                                    }],
+                                    "status": "online",
+                                    "since": 0,
+                                    "afk": false
+                                },
+                            }
+                        })
+                        .to_string();
+                        tx.unbounded_send(Message::Text(identify.to_string())).unwrap();
+                        identified.store(true, Ordering::SeqCst);
+                    } else if payload.op == Opcode::Reconnect {
+                        // TODO dedup code
+                        // TODO add activity to config
+                        let identify = json!({
+                            "op": Opcode::Resume,
+                            "d": {
+                                "token": &config_clone.token,
+                                "session_id": &session_id,
+                                "seq": sequence_number.load(Ordering::SeqCst),
+                            }
+                        })
+                        .to_string();
+                        tx.unbounded_send(Message::Text(identify.to_string())).unwrap();
+                        identified.store(true, Ordering::SeqCst);
                     }
                 }
                 None => {
@@ -180,6 +227,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        Ok::<(), BotError>(())
     });
 
     // TODO this feels wrong
@@ -272,7 +320,7 @@ async fn send_image(client: &Client, channel_id: &str, image: &Bytes, config: &C
         .map_err(|e| e.into())
 }
 
-async fn send_reply(client: &Client, channel_id: &str, reply_id: &str, reply: &str) -> Result<DiscordMessage, BotError> {
+async fn send_reply(client: &Client, channel_id: &str, reply_id: &str, reply: &str) -> Result<DiscordResult<DiscordMessage>, BotError> {
     let url = format!("https://discord.com/api/channels/{}/messages", channel_id);
 
     let json = json!({
@@ -288,7 +336,7 @@ async fn send_reply(client: &Client, channel_id: &str, reply_id: &str, reply: &s
         .json(&json)
         .send()
         .await?
-        .json::<DiscordMessage>()
+        .json::<DiscordResult<DiscordMessage>>()
         .await
         .map_err(|e| e.into())
 }
