@@ -80,146 +80,142 @@ async fn main() -> Result<()> {
         let identified = Arc::new(AtomicBool::from(false));
         let sequence_number = Arc::new(AtomicUsize::from(0));
 
-        let config = Arc::clone(&config);
-        let cache = Arc::clone(&cache);
-        let my_id = my_id.clone();
-        let client = client.clone();
+        let heartbeater: Arc<Mutex<Option<JoinHandle<Result<(), SendError<Message>>>>>> = Arc::new(Mutex::new(None));
+        let session_id = Arc::new(Mutex::new(String::from("")));
 
-        let ws_to_stdout = tokio::spawn(async move {
-            // TODO use option
-            let mut heartbeater: Option<JoinHandle<Result<(), SendError<Message>>>> = None;
-            let mut session_id = String::from("");
+        while let Some(message) = read.next().await {
+            let tx = tx.clone();
             let config = Arc::clone(&config);
-            loop {
-                let tx = tx.clone();
-                match read.next().await {
-                    Some(message) => {
-                        println!("{:#?}", message);
-                        let msg = message.unwrap().to_string();
-                        let payload: Payload = serde_json::from_str(&msg).unwrap();
-                        println!("{:#?}", payload);
-                        if payload.op == Opcode::Hello {
-                            let heartbeat = payload.d.unwrap()["heartbeat_interval"].as_u64().unwrap();
-                            // TODO not handling reconnections for now
-                            let seq_num = Arc::clone(&sequence_number);
-                            heartbeater = Some(tokio::spawn(async move {
-                                loop {
-                                    let hb_message = json! ({
-                                        "op": Opcode::Heartbeat,
-                                        "d": seq_num.load(Ordering::SeqCst)
-                                    });
-                                    tx.send(Message::text(hb_message.to_string()))?;
-                                    println!("sent heartbeat");
-                                    sleep(Duration::from_millis(heartbeat)).await;
-                                }
-                            }));
-                        } else if payload.op == Opcode::HeartbeatAck {
-                            if !identified.load(Ordering::SeqCst) {
-                                // TODO add activity to config
-                                let identify = json!({
-                                    "op": Opcode::Identify,
-                                    "d": {
-                                        "token": &config.token,
-                                        "intents": 512,
-                                        "properties": {
-                                            "$os": "windows",
-                                            "$browser": "brick-bot",
-                                            "$device": "brick-bot"
-                                        },
-                                        "presence": {
-                                            "activities": [{
-                                                "name": "Brickity brick 🧱",
-                                                "type": 0
-                                            }],
-                                            "status": "online",
-                                            "since": 0,
-                                            "afk": false
-                                        },
-                                    }
-                                })
-                                .to_string();
-                                tx.send(Message::Text(identify.to_string())).unwrap();
-                                identified.store(true, Ordering::SeqCst);
-                            }
-                        } else if payload.op == Opcode::Dispatch {
-                            let s = payload.s.to_owned().unwrap();
-                            sequence_number.store(s, Ordering::SeqCst);
-                            if let Some(event) = payload.t {
-                                if event == "MESSAGE_CREATE" {
-                                    let message: DiscordMessage = serde_json::from_value(payload.d.unwrap()).unwrap();
+            let cache = Arc::clone(&cache);
+            let my_id = my_id.clone();
+            let client = client.clone();
+            let identified = Arc::clone(&identified);
+            let session_id = Arc::clone(&session_id);
+            let heartbeater = Arc::clone(&heartbeater);
+            let sequence_number = Arc::clone(&sequence_number);
 
-                                    // clone everything needed
-                                    let config = Arc::clone(&config);
-                                    let client = client.clone();
-                                    let cache = Arc::clone(&cache);
-                                    let my_id = my_id.clone();
+            tokio::spawn(async move {
+                println!("{:#?}", message);
+                let msg = message.unwrap().to_string();
+                let payload: Payload = serde_json::from_str(&msg).unwrap();
+                println!("{:#?}", payload);
+                if payload.op == Opcode::Hello {
+                    let heartbeat = payload.d.unwrap()["heartbeat_interval"].as_u64().unwrap();
+                    // TODO not handling reconnections for now
+                    let seq_num = Arc::clone(&sequence_number);
+                    *heartbeater.lock().await = Some(tokio::spawn(async move {
+                        loop {
+                            let hb_message = json! ({
+                                "op": Opcode::Heartbeat,
+                                "d": seq_num.load(Ordering::SeqCst)
+                            });
+                            tx.send(Message::text(hb_message.to_string()))?;
+                            println!("sent heartbeat");
+                            sleep(Duration::from_millis(heartbeat)).await;
+                        }
+                    }));
+                } else if payload.op == Opcode::HeartbeatAck {
+                    if !identified.load(Ordering::SeqCst) {
+                        // TODO add activity to config
+                        let identify = json!({
+                            "op": Opcode::Identify,
+                            "d": {
+                                "token": &config.token,
+                                "intents": 512,
+                                "properties": {
+                                    "$os": "windows",
+                                    "$browser": "brick-bot",
+                                    "$device": "brick-bot"
+                                },
+                                "presence": {
+                                    "activities": [{
+                                        "name": "Brickity brick 🧱",
+                                        "type": 0
+                                    }],
+                                    "status": "online",
+                                    "since": 0,
+                                    "afk": false
+                                },
+                            }
+                        })
+                        .to_string();
+                        tx.send(Message::Text(identify.to_string())).unwrap();
+                        identified.store(true, Ordering::SeqCst);
+                    }
+                } else if payload.op == Opcode::Dispatch {
+                    let s = payload.s.to_owned().unwrap();
+                    sequence_number.store(s, Ordering::SeqCst);
+                    if let Some(event) = payload.t {
+                        if event == "MESSAGE_CREATE" {
+                            let message: DiscordMessage = serde_json::from_value(payload.d.unwrap()).unwrap();
 
-                                    tokio::spawn(async move {
-                                        on_message_create(message, config, client, cache, &my_id).await?;
-                                        Ok::<(), BotError>(())
-                                    });
-                                } else if event == "READY" {
-                                    // TODO cleanup
-                                    session_id = payload.d.clone().unwrap()["session_id"].as_str().unwrap().to_owned();
-                                }
-                            }
-                        } else if payload.op == Opcode::InvalidSession {
-                            let resumable = payload.d.unwrap().as_bool().unwrap();
-                            if !resumable {
-                                // Reset connection
-                                heartbeater.take().unwrap().abort();
-                                return Ok(());
-                            }
-                            // TODO dedup code
-                            // TODO add activity to config
-                            let identify = json!({
-                                "op": Opcode::Identify,
-                                "d": {
-                                    "token": &config.token,
-                                    "intents": 512,
-                                    "properties": {
-                                        "$os": "windows",
-                                        "$browser": "brick-bot",
-                                        "$device": "brick-bot"
-                                    },
-                                    "presence": {
-                                        "activities": [{
-                                            "name": "Brickity brick 🧱",
-                                            "type": 0
-                                        }],
-                                        "status": "online",
-                                        "since": 0,
-                                        "afk": false
-                                    },
-                                }
-                            })
-                            .to_string();
-                            tx.send(Message::Text(identify.to_string())).unwrap();
-                            identified.store(true, Ordering::SeqCst);
-                        } else if payload.op == Opcode::Reconnect {
-                            // TODO dedup code
-                            let identify = json!({
-                                "op": Opcode::Resume,
-                                "d": {
-                                    "token": &config.token,
-                                    "session_id": &session_id,
-                                    "seq": sequence_number.load(Ordering::SeqCst),
-                                }
-                            })
-                            .to_string();
-                            tx.send(Message::Text(identify.to_string())).unwrap();
-                            identified.store(true, Ordering::SeqCst);
+                            // clone everything needed
+                            let config = Arc::clone(&config);
+                            let client = client.clone();
+                            let cache = Arc::clone(&cache);
+                            let my_id = my_id.clone();
+
+                            tokio::spawn(async move {
+                                on_message_create(message, config, client, cache, &my_id).await?;
+                                Ok::<(), BotError>(())
+                            });
+                        } else if event == "READY" {
+                            // TODO cleanup
+                            *session_id.lock().await = payload.d.clone().unwrap()["session_id"].as_str().unwrap().to_owned();
                         }
                     }
-                    None => {
-                        break;
+                } else if payload.op == Opcode::InvalidSession {
+                    let resumable = payload.d.unwrap().as_bool().unwrap();
+                    if !resumable {
+                        // Reset connection
+                        heartbeater.lock().await.take().unwrap().abort();
+                        return Ok(());
                     }
+                    // TODO dedup code
+                    // TODO add activity to config
+                    let identify = json!({
+                        "op": Opcode::Identify,
+                        "d": {
+                            "token": &config.token,
+                            "intents": 512,
+                            "properties": {
+                                "$os": "windows",
+                                "$browser": "brick-bot",
+                                "$device": "brick-bot"
+                            },
+                            "presence": {
+                                "activities": [{
+                                    "name": "Brickity brick 🧱",
+                                    "type": 0
+                                }],
+                                "status": "online",
+                                "since": 0,
+                                "afk": false
+                            },
+                        }
+                    })
+                    .to_string();
+                    tx.send(Message::Text(identify.to_string())).unwrap();
+                    identified.store(true, Ordering::SeqCst);
+                } else if payload.op == Opcode::Reconnect {
+                    // TODO dedup code
+                    let identify = json!({
+                        "op": Opcode::Resume,
+                        "d": {
+                            "token": &config.token,
+                            "session_id": &*session_id.lock().await,
+                            "seq": sequence_number.load(Ordering::SeqCst),
+                        }
+                    })
+                    .to_string();
+                    tx.send(Message::Text(identify.to_string())).unwrap();
+                    identified.store(true, Ordering::SeqCst);
                 }
-            }
-            Ok::<(), BotError>(())
-        });
+                Ok::<(), BotError>(())
+            });
+        }
 
-        let join_res = tokio::try_join! {sender, ws_to_stdout};
+        let join_res = tokio::try_join! {sender};
 
         match join_res {
             Ok(_) => log_message("Another connection iteration"),
