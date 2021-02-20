@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use std::{collections::HashMap, path::PathBuf};
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Config {
     pub token: String,
     pub self_brick_message: Option<String>,
@@ -26,7 +26,7 @@ impl Config {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Keyframe {
     pub x: u32,
     pub y: u32,

@@ -1,16 +1,16 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use image::{codecs::gif::*, AnimationDecoder, GenericImageView, ImageFormat};
 
-use crate::{config::Config, BotError, BRICK_GIF};
+use crate::config::Config;
 
-pub async fn brickify_gif(avatar: &Bytes, config: &Config) -> Result<Bytes, BotError> {
-    let source = &BRICK_GIF;
+use crate::error::BotError;
 
+pub async fn brickify_gif(source: &[u8], avatar: &Bytes, config: &Config) -> Result<Bytes, BotError> {
     let avatar = image::load_from_memory_with_format(avatar.as_ref(), ImageFormat::Png)?;
 
     let (max_x, max_y) = avatar.dimensions();
 
-    let decoder = GifDecoder::new(source.get().unwrap().reader()).unwrap();
+    let decoder = GifDecoder::new(source.clone().reader()).unwrap();
 
     let mut frames = decoder.into_frames().collect_frames()?;
 

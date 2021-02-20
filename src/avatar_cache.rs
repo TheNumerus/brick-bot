@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use reqwest::Client;
 
-use crate::{structs::User, BotError};
+use crate::{error::BotError, structs::User};
 
 /// Caches avatar images in memory
 pub struct AvatarCache {
