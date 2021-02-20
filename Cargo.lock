@@ -73,7 +73,6 @@ dependencies = [
  "anyhow",
  "bytes",
  "chrono",
- "futures-channel",
  "futures-util",
  "gif",
  "image",
