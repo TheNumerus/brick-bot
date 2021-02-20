@@ -49,5 +49,13 @@ command = "!brick" # bot will respond to this command
 
 ## Things to do
 
-- communication through WebSockets (bot will show as online when running)
 - keyframe interpolation
+- general code cleanup
+
+## Changelog
+
+### v0.2
+
+- Bot runs on WebSockets
+
+### v0.1 - First release
