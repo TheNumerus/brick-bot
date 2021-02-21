@@ -29,21 +29,18 @@ use brick_bot::{
 /// event handlers specific to brick-bot behaviour
 mod event_handlers;
 
-pub static TOKEN_HEADER: OnceCell<String> = OnceCell::new();
 pub static BRICK_GIF: OnceCell<Vec<u8>> = OnceCell::new();
-
-// TODO handle unwraps
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let config = prepare_config().await?;
 
+    let state = Arc::new(State::new(config));
+
     let client = reqwest::Client::new();
 
-    set_token(&config.token)?;
-
     BRICK_GIF
-        .set(tokio::fs::read(&config.image_path).await.context("cannot find image on given path")?)
+        .set(tokio::fs::read(&state.config.image_path).await.context("cannot find image on given path")?)
         .unwrap();
 
     // stores bot id for special interactions
@@ -71,25 +68,18 @@ async fn main() -> Result<()> {
             Ok::<(), tokio_tungstenite::tungstenite::error::Error>(())
         });
 
-        // used for sending identify event on first heartbeat ack
-        let identified = Arc::new(AtomicBool::from(false));
-        // stores last event number
-        let sequence_number = Arc::new(AtomicUsize::from(0));
+        state.reset_session().await;
 
         // maybe something could be done to infer this type
         let heartbeater: Arc<Mutex<Option<JoinHandle<Result<(), SendError<Message>>>>>> = Arc::new(Mutex::new(None));
-        let session_id = Arc::new(Mutex::new(String::from("")));
 
         while let Some(message) = read.next().await {
             let tx = tx.clone();
-            let config = Arc::clone(&config);
             let cache = Arc::clone(&cache);
             let bot_id = Arc::clone(&bot_id);
             let client = client.clone();
-            let identified = Arc::clone(&identified);
-            let session_id = Arc::clone(&session_id);
             let heartbeater = Arc::clone(&heartbeater);
-            let sequence_number = Arc::clone(&sequence_number);
+            let state = Arc::clone(&state);
 
             tokio::spawn(async move {
                 // return if close connection
@@ -108,14 +98,14 @@ async fn main() -> Result<()> {
 
                         // update seq number
                         let s = payload.s.to_owned().unwrap();
-                        sequence_number.store(s, Ordering::SeqCst);
+                        state.sequence_number.store(s, Ordering::SeqCst);
 
                         if let Some(event) = payload.t {
                             if event == "MESSAGE_CREATE" {
                                 let message: DiscordMessage = serde_json::from_value(payload.d.unwrap()).unwrap();
 
                                 tokio::spawn(async move {
-                                    event_handlers::on_message_create(message, config, client, cache, bot_id).await?;
+                                    event_handlers::on_message_create(message, &state.config, client, cache, bot_id).await?;
                                     Ok::<(), BotError>(())
                                 });
                             } else if event == "READY" {
@@ -126,7 +116,7 @@ async fn main() -> Result<()> {
                                         .ok_or_else(|| BotError::ApiError(String::from("event READY did not contain any data")))?,
                                 )?;
 
-                                *session_id.lock().await = data.session_id;
+                                *state.session_id.lock().await = Some(data.session_id);
                                 *bot_id.lock().await = Some(data.user.id);
                             }
                         }
@@ -135,23 +125,28 @@ async fn main() -> Result<()> {
                         // send new heartbeat on request
                         let hb_message = json! ({
                             "op": Opcode::Heartbeat,
-                            "d": sequence_number.load(Ordering::SeqCst)
+                            "d": state.sequence_number.load(Ordering::SeqCst)
                         });
                         tx.send(Message::text(hb_message.to_string())).unwrap();
                     }
                     Opcode::Reconnect => {
                         // try resuming connection
-                        let resume = json!({
-                            "op": Opcode::Resume,
-                            "d": {
-                                "token": &config.token,
-                                "session_id": &*session_id.lock().await,
-                                "seq": sequence_number.load(Ordering::SeqCst),
-                            }
-                        })
-                        .to_string();
-                        tx.send(Message::Text(resume)).unwrap();
-                        identified.store(true, Ordering::SeqCst);
+                        let resume = {
+                            let lock = state.session_id.lock().await;
+                            let session_id = (*lock).as_ref().unwrap();
+
+                            json!({
+                                "op": Opcode::Resume,
+                                "d": {
+                                    "token": &state.config.token,
+                                    "session_id": session_id,
+                                    "seq": state.sequence_number.load(Ordering::SeqCst),
+                                }
+                            })
+                        };
+
+                        tx.send(Message::Text(resume.to_string())).unwrap();
+                        state.identified.store(true, Ordering::SeqCst);
                     }
                     Opcode::InvalidSession => {
                         // check if session can be resumed
@@ -163,14 +158,14 @@ async fn main() -> Result<()> {
                         }
 
                         // try new identification
-                        let identify_message = create_identify_message(&config);
+                        let identify_message = create_identify_message(&state.config);
                         tx.send(identify_message).unwrap();
-                        identified.store(true, Ordering::SeqCst);
+                        state.identified.store(true, Ordering::SeqCst);
                     }
                     Opcode::Hello => {
                         // setup heartbeater on first reply
                         let heartbeat = payload.d.unwrap()["heartbeat_interval"].as_u64().unwrap();
-                        let seq_num = Arc::clone(&sequence_number);
+                        let state = Arc::clone(&state);
 
                         *heartbeater.lock().await = Some(tokio::spawn(async move {
                             let mut interval = tokio::time::interval(Duration::from_millis(heartbeat));
@@ -178,7 +173,7 @@ async fn main() -> Result<()> {
                                 interval.tick().await;
                                 let hb_message = json! ({
                                     "op": Opcode::Heartbeat,
-                                    "d": seq_num.load(Ordering::SeqCst)
+                                    "d": state.sequence_number.load(Ordering::SeqCst)
                                 });
                                 tx.send(Message::text(hb_message.to_string()))?;
                             }
@@ -186,10 +181,10 @@ async fn main() -> Result<()> {
                     }
                     Opcode::HeartbeatAck => {
                         // on first ack send identify event
-                        if !identified.load(Ordering::SeqCst) {
-                            let identify_message = create_identify_message(&config);
+                        if !state.identified.load(Ordering::SeqCst) {
+                            let identify_message = create_identify_message(&state.config);
                             tx.send(identify_message).unwrap();
-                            identified.store(true, Ordering::SeqCst);
+                            state.identified.store(true, Ordering::SeqCst);
                         }
                     }
                     Opcode::Identify | Opcode::PresenceUpdate | Opcode::VoiceStateUpdate | Opcode::Resume | Opcode::RequestGuildMembers => {
@@ -210,18 +205,11 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn prepare_config() -> Result<Arc<Config>> {
+async fn prepare_config() -> Result<Config> {
     let config = tokio::fs::read_to_string("bot.toml").await.context("Error loading bot configuration.")?;
     let config: Config = toml::from_str(&config).context("Could not parse settings")?;
     // It's safe to unwrap string options now
-    Ok(Arc::from(config.set_missing()))
-}
-
-// TODO move these too
-
-fn set_token(token: &str) -> Result<()> {
-    TOKEN_HEADER.set(format!("Bot {}", token)).unwrap();
-    Ok(())
+    Ok(config.set_missing())
 }
 
 pub fn log_message<T: AsRef<str> + Display>(message: T) {
@@ -232,7 +220,7 @@ pub fn log_message<T: AsRef<str> + Display>(message: T) {
     println!("[{}] - {}", formated_time, message);
 }
 
-fn create_identify_message(config: &Arc<Config>) -> Message {
+fn create_identify_message(config: &Config) -> Message {
     let token = &config.token;
     // TODO move to config
     let activity_name = "Brickity brick 🧱";
@@ -261,4 +249,29 @@ fn create_identify_message(config: &Arc<Config>) -> Message {
     .to_string();
 
     Message::Text(identify)
+}
+
+struct State {
+    identified: AtomicBool,
+    sequence_number: AtomicUsize,
+    config: Config,
+    session_id: Mutex<Option<String>>,
+}
+
+impl State {
+    pub fn new(config: Config) -> Self {
+        Self {
+            identified: AtomicBool::new(false),
+            sequence_number: AtomicUsize::new(0),
+            session_id: Mutex::new(None),
+            config,
+        }
+    }
+
+    /// Resets identification, sequence number and session_id
+    pub async fn reset_session(&self) {
+        self.identified.store(false, Ordering::SeqCst);
+        self.sequence_number.store(0, Ordering::SeqCst);
+        *self.session_id.lock().await = None
+    }
 }

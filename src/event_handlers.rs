@@ -15,7 +15,7 @@ use crate::{log_message, BRICK_GIF};
 /// Called when bot recieves message
 pub async fn on_message_create(
     message: Message,
-    config: Arc<Config>,
+    config: &Config,
     client: Client,
     avatar_cache: Arc<Mutex<AvatarCache>>,
     bot_id: Arc<Mutex<Option<String>>>,
