@@ -22,14 +22,10 @@ use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use tokio::{
-    sync::{
-        mpsc::{error::SendError, unbounded_channel},
-        Mutex,
-    },
+    sync::{mpsc::error::SendError, Mutex},
     task::JoinHandle,
-    time::sleep,
 };
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use tokio_tungstenite::tungstenite::protocol::Message;
 
 use brick_bot::{
     avatar_cache::AvatarCache,
@@ -63,13 +59,16 @@ async fn main() -> Result<()> {
 
     // will enter enother iteration only when discord needs another connection
     loop {
-        let (tx, mut rx) = unbounded_channel();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let (ws_stream, _ws_res) = connect_async("wss://gateway.discord.gg/?v=8&encoding=json").await.expect("Failed to connect");
+        let (ws_stream, _ws_res) = tokio_tungstenite::connect_async("wss://gateway.discord.gg/?v=8&encoding=json")
+            .await
+            .context("Failed to connect")?;
         log_message("WebSocket connected");
 
         let (mut write, mut read) = ws_stream.split();
 
+        // this task will send all messages from channel to websocket stream
         let sender = tokio::spawn(async move {
             while let Some(m) = rx.recv().await {
                 write.send(m).await?;
@@ -77,9 +76,12 @@ async fn main() -> Result<()> {
             Ok::<(), tokio_tungstenite::tungstenite::error::Error>(())
         });
 
+        // used for sending identify event on first heartbeat ack
         let identified = Arc::new(AtomicBool::from(false));
+        // stores last event number
         let sequence_number = Arc::new(AtomicUsize::from(0));
 
+        // maybe something could be done to infer this type
         let heartbeater: Arc<Mutex<Option<JoinHandle<Result<(), SendError<Message>>>>>> = Arc::new(Mutex::new(None));
         let session_id = Arc::new(Mutex::new(String::from("")));
 
@@ -102,128 +104,108 @@ async fn main() -> Result<()> {
                     }
                 }
 
-                //println!("{:#?}", message);
                 let msg = message.unwrap().to_string();
                 let payload: Payload = serde_json::from_str(&msg).unwrap();
-                //println!("{:#?}", payload);
-                if payload.op == Opcode::Hello {
-                    let heartbeat = payload.d.unwrap()["heartbeat_interval"].as_u64().unwrap();
-                    // TODO not handling reconnections for now
-                    let seq_num = Arc::clone(&sequence_number);
-                    *heartbeater.lock().await = Some(tokio::spawn(async move {
-                        loop {
-                            let hb_message = json! ({
-                                "op": Opcode::Heartbeat,
-                                "d": seq_num.load(Ordering::SeqCst)
-                            });
-                            tx.send(Message::text(hb_message.to_string()))?;
-                            sleep(Duration::from_millis(heartbeat)).await;
+
+                match &payload.op {
+                    Opcode::Dispatch => {
+                        // handle all events here
+
+                        // update seq number
+                        let s = payload.s.to_owned().unwrap();
+                        sequence_number.store(s, Ordering::SeqCst);
+
+                        if let Some(event) = payload.t {
+                            if event == "MESSAGE_CREATE" {
+                                let message: DiscordMessage = serde_json::from_value(payload.d.unwrap()).unwrap();
+
+                                // clone everything needed
+                                let config = Arc::clone(&config);
+                                let client = client.clone();
+                                let cache = Arc::clone(&cache);
+                                let my_id = my_id.clone();
+
+                                tokio::spawn(async move {
+                                    on_message_create(message, config, client, cache, &my_id).await?;
+                                    Ok::<(), BotError>(())
+                                });
+                            } else if event == "READY" {
+                                // update session id for resuming later
+                                *session_id.lock().await = payload.d.clone().unwrap()["session_id"].as_str().unwrap().to_owned();
+                            }
                         }
-                    }));
-                } else if payload.op == Opcode::HeartbeatAck {
-                    if !identified.load(Ordering::SeqCst) {
-                        // TODO add activity to config
-                        let identify = json!({
-                            "op": Opcode::Identify,
+                    }
+                    Opcode::Heartbeat => {
+                        // send new heartbeat on request
+                        let hb_message = json! ({
+                            "op": Opcode::Heartbeat,
+                            "d": sequence_number.load(Ordering::SeqCst)
+                        });
+                        tx.send(Message::text(hb_message.to_string())).unwrap();
+                    }
+                    Opcode::Reconnect => {
+                        // try resuming connection
+                        let resume = json!({
+                            "op": Opcode::Resume,
                             "d": {
                                 "token": &config.token,
-                                "intents": 512,
-                                "properties": {
-                                    "$os": "windows",
-                                    "$browser": "brick-bot",
-                                    "$device": "brick-bot"
-                                },
-                                "presence": {
-                                    "activities": [{
-                                        "name": "Brickity brick 🧱",
-                                        "type": 0
-                                    }],
-                                    "status": "online",
-                                    "since": 0,
-                                    "afk": false
-                                },
+                                "session_id": &*session_id.lock().await,
+                                "seq": sequence_number.load(Ordering::SeqCst),
                             }
                         })
                         .to_string();
-                        tx.send(Message::Text(identify.to_string())).unwrap();
+                        tx.send(Message::Text(resume)).unwrap();
                         identified.store(true, Ordering::SeqCst);
                     }
-                } else if payload.op == Opcode::Dispatch {
-                    let s = payload.s.to_owned().unwrap();
-                    sequence_number.store(s, Ordering::SeqCst);
-                    if let Some(event) = payload.t {
-                        if event == "MESSAGE_CREATE" {
-                            let message: DiscordMessage = serde_json::from_value(payload.d.unwrap()).unwrap();
+                    Opcode::InvalidSession => {
+                        // check if session can be resumed
+                        let resumable = payload.d.unwrap().as_bool().unwrap();
+                        if !resumable {
+                            // Reset connection
+                            heartbeater.lock().await.take().unwrap().abort();
+                            return Ok(());
+                        }
 
-                            // clone everything needed
-                            let config = Arc::clone(&config);
-                            let client = client.clone();
-                            let cache = Arc::clone(&cache);
-                            let my_id = my_id.clone();
+                        // try new identification
+                        let identify_message = create_identify_message(&config);
+                        tx.send(identify_message).unwrap();
+                        identified.store(true, Ordering::SeqCst);
+                    }
+                    Opcode::Hello => {
+                        // setup heartbeater on first reply
+                        let heartbeat = payload.d.unwrap()["heartbeat_interval"].as_u64().unwrap();
+                        let seq_num = Arc::clone(&sequence_number);
 
-                            tokio::spawn(async move {
-                                on_message_create(message, config, client, cache, &my_id).await?;
-                                Ok::<(), BotError>(())
-                            });
-                        } else if event == "READY" {
-                            // TODO cleanup
-                            *session_id.lock().await = payload.d.clone().unwrap()["session_id"].as_str().unwrap().to_owned();
+                        *heartbeater.lock().await = Some(tokio::spawn(async move {
+                            let mut interval = tokio::time::interval(Duration::from_millis(heartbeat));
+                            loop {
+                                interval.tick().await;
+                                let hb_message = json! ({
+                                    "op": Opcode::Heartbeat,
+                                    "d": seq_num.load(Ordering::SeqCst)
+                                });
+                                tx.send(Message::text(hb_message.to_string()))?;
+                            }
+                        }));
+                    }
+                    Opcode::HeartbeatAck => {
+                        // on first ack send identify event
+                        if !identified.load(Ordering::SeqCst) {
+                            let identify_message = create_identify_message(&config);
+                            tx.send(identify_message).unwrap();
+                            identified.store(true, Ordering::SeqCst);
                         }
                     }
-                } else if payload.op == Opcode::InvalidSession {
-                    let resumable = payload.d.unwrap().as_bool().unwrap();
-                    if !resumable {
-                        // Reset connection
-                        heartbeater.lock().await.take().unwrap().abort();
-                        return Ok(());
+                    Opcode::Identify | Opcode::PresenceUpdate | Opcode::VoiceStateUpdate | Opcode::Resume | Opcode::RequestGuildMembers => {
+                        // according to Discord API docs, these opcodes are only sent, not recieveed, so if they are recieved, there is an error/bug
+                        log_message(format!("Recieved unexpected opcode: {:?}", payload.op));
                     }
-                    // TODO dedup code
-                    // TODO add activity to config
-                    let identify = json!({
-                        "op": Opcode::Identify,
-                        "d": {
-                            "token": &config.token,
-                            "intents": 512,
-                            "properties": {
-                                "$os": "windows",
-                                "$browser": "brick-bot",
-                                "$device": "brick-bot"
-                            },
-                            "presence": {
-                                "activities": [{
-                                    "name": "Brickity brick 🧱",
-                                    "type": 0
-                                }],
-                                "status": "online",
-                                "since": 0,
-                                "afk": false
-                            },
-                        }
-                    })
-                    .to_string();
-                    tx.send(Message::Text(identify.to_string())).unwrap();
-                    identified.store(true, Ordering::SeqCst);
-                } else if payload.op == Opcode::Reconnect {
-                    // TODO dedup code
-                    let identify = json!({
-                        "op": Opcode::Resume,
-                        "d": {
-                            "token": &config.token,
-                            "session_id": &*session_id.lock().await,
-                            "seq": sequence_number.load(Ordering::SeqCst),
-                        }
-                    })
-                    .to_string();
-                    tx.send(Message::Text(identify.to_string())).unwrap();
-                    identified.store(true, Ordering::SeqCst);
                 }
                 Ok::<(), BotError>(())
             });
         }
 
-        let join_res = tokio::try_join! {sender};
-
-        match join_res {
+        match sender.await? {
             Ok(_) => log_message("Another connection iteration"),
             Err(e) => {
                 log_message(format!("Error {:#?}", e));
@@ -372,4 +354,35 @@ fn log_message<T: AsRef<str> + Display>(message: T) {
     let formated_time = time.format("%F %T");
 
     println!("[{}] - {}", formated_time, message);
+}
+
+fn create_identify_message(config: &Arc<Config>) -> Message {
+    let token = &config.token;
+    // TODO move to config
+    let activity_name = "Brickity brick 🧱";
+
+    let identify = json!({
+        "op": Opcode::Identify,
+        "d": {
+            "token": token,
+            "intents": 512,
+            "properties": {
+                "$os": "windows",
+                "$browser": "brick-bot",
+                "$device": "brick-bot"
+            },
+            "presence": {
+                "activities": [{
+                    "name": activity_name,
+                    "type": 0
+                }],
+                "status": "online",
+                "since": 0,
+                "afk": false
+            },
+        }
+    })
+    .to_string();
+
+    Message::Text(identify)
 }
