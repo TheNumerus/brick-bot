@@ -1,6 +1,6 @@
 [package]
 name = "brick-bot"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Petr Volf <Petr.volf216@gmail.com>"]
 edition = "2018"
 

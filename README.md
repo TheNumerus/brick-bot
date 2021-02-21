@@ -54,6 +54,13 @@ command = "!brick" # bot will respond to this command
 
 ## Changelog
 
+## v0.2.1
+
+- Refactored code
+- Removed error/bug from log caused by reconnections
+- Removed `once_cell` dependency
+- Removed unneeded features from dependencies
+
 ### v0.2
 
 - Bot runs on WebSockets
