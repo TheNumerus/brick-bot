@@ -10,7 +10,7 @@ use brick_bot::{
 use reqwest::Client;
 use tokio::sync::Mutex;
 
-use crate::{log_message, BRICK_GIF};
+use crate::log_message;
 
 /// Called when bot recieves message
 pub async fn on_message_create(
@@ -19,6 +19,7 @@ pub async fn on_message_create(
     client: Client,
     avatar_cache: Arc<Mutex<AvatarCache>>,
     bot_id: Arc<Mutex<Option<String>>>,
+    brick_gif: Arc<Vec<u8>>,
 ) -> Result<(), BotError> {
     if !message.content.starts_with(&config.command) {
         return Ok(());
@@ -64,7 +65,7 @@ pub async fn on_message_create(
             avatar
         };
 
-        let image = brickify_gif(BRICK_GIF.get().unwrap(), &avatar, &config).await?;
+        let image = brickify_gif(&brick_gif, &avatar, &config).await?;
 
         let image_res: DiscordResult<Message> = send_image(&client, &message.channel_id, &image, &config).await?;
         Result::from(image_res)?;

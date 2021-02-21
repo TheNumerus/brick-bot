@@ -8,7 +8,6 @@ use std::{
 };
 
 use chrono::Utc;
-use once_cell::sync::OnceCell;
 
 use anyhow::{Context, Result};
 
@@ -29,19 +28,15 @@ use brick_bot::{
 /// event handlers specific to brick-bot behaviour
 mod event_handlers;
 
-pub static BRICK_GIF: OnceCell<Vec<u8>> = OnceCell::new();
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let config = prepare_config().await?;
-
     let state = Arc::new(State::new(config));
 
     let client = reqwest::Client::new();
 
-    BRICK_GIF
-        .set(tokio::fs::read(&state.config.image_path).await.context("cannot find image on given path")?)
-        .unwrap();
+    let brick_gif = tokio::fs::read(&state.config.image_path).await.context("cannot find image on given path")?;
+    let brick_gif = Arc::new(brick_gif);
 
     // stores bot id for special interactions
     // bot id will probably not change while running, so store it here, so it's not reset on every connection loop
@@ -80,6 +75,7 @@ async fn main() -> Result<()> {
             let client = client.clone();
             let heartbeater = Arc::clone(&heartbeater);
             let state = Arc::clone(&state);
+            let brick_gif = Arc::clone(&brick_gif);
 
             tokio::spawn(async move {
                 // return if close connection
@@ -105,7 +101,7 @@ async fn main() -> Result<()> {
                                 let message: DiscordMessage = serde_json::from_value(payload.d.unwrap()).unwrap();
 
                                 tokio::spawn(async move {
-                                    event_handlers::on_message_create(message, &state.config, client, cache, bot_id).await?;
+                                    event_handlers::on_message_create(message, &state.config, client, cache, bot_id, brick_gif).await?;
                                     Ok::<(), BotError>(())
                                 });
                             } else if event == "READY" {
