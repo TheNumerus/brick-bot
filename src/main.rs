@@ -55,20 +55,32 @@ async fn main() -> Result<()> {
 
         let (mut write, mut read) = ws_stream.split();
 
+        state.reset_session().await;
+
+        let state_clone = Arc::clone(&state);
         // this task will send all messages from channel to websocket stream
         let sender = tokio::spawn(async move {
             while let Some(m) = rx.recv().await {
-                write.send(m).await?;
+                // check if connection is even open before we send something
+                if state_clone.connecion_open.load(Ordering::SeqCst) {
+                    write.send(m).await?;
+                } else {
+                    return Ok(());
+                }
             }
             Ok::<(), tokio_tungstenite::tungstenite::error::Error>(())
         });
-
-        state.reset_session().await;
 
         // maybe something could be done to infer this type
         let heartbeater: Arc<Mutex<Option<JoinHandle<Result<(), SendError<Message>>>>>> = Arc::new(Mutex::new(None));
 
         while let Some(message) = read.next().await {
+            // close on error
+            if let Err(_) = message {
+                state.connecion_open.store(false, Ordering::SeqCst);
+                break;
+            }
+
             let tx = tx.clone();
             let cache = Arc::clone(&cache);
             let bot_id = Arc::clone(&bot_id);
@@ -79,13 +91,14 @@ async fn main() -> Result<()> {
 
             tokio::spawn(async move {
                 // return if close connection
-                if let Ok(msg) = &message {
-                    if let Message::Close(_) = msg {
-                        return Ok(());
-                    }
+                // message is always Ok(_) here
+                let message = message.unwrap();
+                if let Message::Close(_) = message {
+                    state.connecion_open.store(false, Ordering::SeqCst);
+                    return Ok(());
                 }
 
-                let msg = message.unwrap().to_string();
+                let msg = message.to_string();
                 let payload: Payload = serde_json::from_str(&msg).unwrap();
 
                 match &payload.op {
@@ -150,6 +163,7 @@ async fn main() -> Result<()> {
                         if !resumable {
                             // Reset connection
                             heartbeater.lock().await.take().unwrap().abort();
+                            state.connecion_open.store(false, Ordering::SeqCst);
                             return Ok(());
                         }
 
@@ -161,6 +175,7 @@ async fn main() -> Result<()> {
                     Opcode::Hello => {
                         // setup heartbeater on first reply
                         let heartbeat = payload.d.unwrap()["heartbeat_interval"].as_u64().unwrap();
+                        state.connecion_open.store(true, Ordering::SeqCst);
                         let state = Arc::clone(&state);
 
                         *heartbeater.lock().await = Some(tokio::spawn(async move {
@@ -193,7 +208,7 @@ async fn main() -> Result<()> {
         }
 
         match sender.await? {
-            Ok(_) => log_message("Another connection iteration"),
+            Ok(_) => log_message("WebSocket reconnecting"),
             Err(e) => {
                 log_message(format!("Error {:#?}", e));
             }
@@ -249,6 +264,7 @@ fn create_identify_message(config: &Config) -> Message {
 
 struct State {
     identified: AtomicBool,
+    connecion_open: AtomicBool,
     sequence_number: AtomicUsize,
     config: Config,
     session_id: Mutex<Option<String>>,
@@ -258,15 +274,17 @@ impl State {
     pub fn new(config: Config) -> Self {
         Self {
             identified: AtomicBool::new(false),
+            connecion_open: AtomicBool::new(false),
             sequence_number: AtomicUsize::new(0),
             session_id: Mutex::new(None),
             config,
         }
     }
 
-    /// Resets identification, sequence number and session_id
+    /// Resets identification, sequence number, connection status and session_id
     pub async fn reset_session(&self) {
         self.identified.store(false, Ordering::SeqCst);
+        self.connecion_open.store(false, Ordering::SeqCst);
         self.sequence_number.store(0, Ordering::SeqCst);
         *self.session_id.lock().await = None
     }
