@@ -7,15 +7,8 @@ use std::{
     time::Duration,
 };
 
-use bytes::Bytes;
 use chrono::Utc;
 use once_cell::sync::OnceCell;
-use reqwest::{
-    multipart::{Form, Part},
-    Client,
-};
-
-use serde::de::DeserializeOwned;
 
 use anyhow::{Context, Result};
 
@@ -28,12 +21,13 @@ use tokio::{
 use tokio_tungstenite::tungstenite::protocol::Message;
 
 use brick_bot::{
-    avatar_cache::AvatarCache,
     config::Config,
-    error::BotError,
-    image_edit::brickify_gif,
-    structs::{DiscordResult, Message as DiscordMessage, Opcode, Payload, User},
+    structs::{Message as DiscordMessage, Opcode, Payload, Ready},
+    AvatarCache, BotError,
 };
+
+/// event handlers specific to brick-bot behaviour
+mod event_handlers;
 
 pub static TOKEN_HEADER: OnceCell<String> = OnceCell::new();
 pub static BRICK_GIF: OnceCell<Vec<u8>> = OnceCell::new();
@@ -52,8 +46,9 @@ async fn main() -> Result<()> {
         .set(tokio::fs::read(&config.image_path).await.context("cannot find image on given path")?)
         .unwrap();
 
-    let me: DiscordResult<User> = get_json(&client, "https://discord.com/api/users/@me").await?;
-    let my_id = Result::from(me)?.id;
+    // stores bot id for special interactions
+    // bot id will probably not change while running, so store it here, so it's not reset on every connection loop
+    let bot_id = Arc::new(Mutex::new(None));
 
     let cache = Arc::new(Mutex::new(AvatarCache::new()));
 
@@ -89,7 +84,7 @@ async fn main() -> Result<()> {
             let tx = tx.clone();
             let config = Arc::clone(&config);
             let cache = Arc::clone(&cache);
-            let my_id = my_id.clone();
+            let bot_id = Arc::clone(&bot_id);
             let client = client.clone();
             let identified = Arc::clone(&identified);
             let session_id = Arc::clone(&session_id);
@@ -119,19 +114,20 @@ async fn main() -> Result<()> {
                             if event == "MESSAGE_CREATE" {
                                 let message: DiscordMessage = serde_json::from_value(payload.d.unwrap()).unwrap();
 
-                                // clone everything needed
-                                let config = Arc::clone(&config);
-                                let client = client.clone();
-                                let cache = Arc::clone(&cache);
-                                let my_id = my_id.clone();
-
                                 tokio::spawn(async move {
-                                    on_message_create(message, config, client, cache, &my_id).await?;
+                                    event_handlers::on_message_create(message, config, client, cache, bot_id).await?;
                                     Ok::<(), BotError>(())
                                 });
                             } else if event == "READY" {
                                 // update session id for resuming later
-                                *session_id.lock().await = payload.d.clone().unwrap()["session_id"].as_str().unwrap().to_owned();
+                                let data: Ready = serde_json::from_value(
+                                    payload
+                                        .d
+                                        .ok_or_else(|| BotError::ApiError(String::from("event READY did not contain any data")))?,
+                                )?;
+
+                                *session_id.lock().await = data.session_id;
+                                *bot_id.lock().await = Some(data.user.id);
                             }
                         }
                     }
@@ -214,61 +210,6 @@ async fn main() -> Result<()> {
     }
 }
 
-/// Called when bot recieves message
-async fn on_message_create(
-    message: DiscordMessage,
-    config: Arc<Config>,
-    client: Client,
-    avatar_cache: Arc<Mutex<AvatarCache>>,
-    my_id: &str,
-) -> Result<(), BotError> {
-    if !message.content.starts_with(&config.command) {
-        return Ok(());
-    }
-
-    // send error messeage
-    if message.mentions.is_empty() {
-        match message.mention_roles {
-            Some(roles) if !roles.is_empty() => {
-                let res = send_reply(&client, &message.channel_id, &message.id, &config.err_msg_tag_role.clone().unwrap()).await?;
-                Result::from(res)?;
-                log_message("Error - tagged role");
-            }
-            _ => {
-                let res = send_reply(&client, &message.channel_id, &message.id, &config.err_msg_tag_nobody.clone().unwrap()).await?;
-                Result::from(res)?;
-                log_message("Error - tagged nobody");
-            }
-        }
-    }
-
-    // brick everyone mentioned
-    for user in message.mentions {
-        if user.id == my_id {
-            if let Some(ref self_message) = config.self_brick_message {
-                send_reply(&client, &message.channel_id, &message.id, self_message).await?;
-                log_message(format!("Bricked self"));
-                continue;
-            }
-        }
-
-        let avatar = {
-            let mut lock = avatar_cache.lock().await;
-            let avatar = lock.get(&client, &user).await?.clone();
-            avatar
-        };
-
-        let image = brickify_gif(BRICK_GIF.get().unwrap(), &avatar, &config).await?;
-
-        let image_res: DiscordResult<DiscordMessage> = send_image(&client, &message.channel_id, &image, &config).await?;
-        Result::from(image_res)?;
-
-        log_message(format!("Bricked user \"{}\"", user.username));
-    }
-
-    Ok(())
-}
-
 async fn prepare_config() -> Result<Arc<Config>> {
     let config = tokio::fs::read_to_string("bot.toml").await.context("Error loading bot configuration.")?;
     let config: Config = toml::from_str(&config).context("Could not parse settings")?;
@@ -278,77 +219,12 @@ async fn prepare_config() -> Result<Arc<Config>> {
 
 // TODO move these too
 
-async fn get_json<T: DeserializeOwned>(client: &Client, path: &str) -> Result<DiscordResult<T>, BotError> {
-    client
-        .get(path)
-        .header("Authorization", TOKEN_HEADER.get().ok_or(BotError::InternalError)?)
-        .send()
-        .await?
-        .json::<DiscordResult<T>>()
-        .await
-        .map_err(|e| e.into())
-}
-
-/// Mainly used for development
-#[allow(dead_code)]
-async fn get_text(client: &Client, path: &str) -> Result<String, BotError> {
-    client
-        .get(path)
-        .header("Authorization", TOKEN_HEADER.get().ok_or(BotError::InternalError)?)
-        .send()
-        .await?
-        .text()
-        .await
-        .map_err(|e| e.into())
-}
-
-async fn send_image(client: &Client, channel_id: &str, image: &Bytes, config: &Config) -> Result<DiscordResult<DiscordMessage>, BotError> {
-    let url = format!("https://discord.com/api/channels/{}/messages", channel_id);
-
-    let image_bytes = image.as_ref().to_owned();
-
-    let file_part = Part::bytes(image_bytes).file_name(config.image_name.clone().unwrap());
-
-    let form = Form::new().part("file", file_part);
-
-    client
-        .post(&url)
-        .header("Authorization", TOKEN_HEADER.get().ok_or(BotError::InternalError)?)
-        .multipart(form)
-        .send()
-        .await?
-        .json::<DiscordResult<DiscordMessage>>()
-        .await
-        .map_err(|e| e.into())
-}
-
-async fn send_reply(client: &Client, channel_id: &str, reply_id: &str, reply: &str) -> Result<DiscordResult<DiscordMessage>, BotError> {
-    let url = format!("https://discord.com/api/channels/{}/messages", channel_id);
-
-    let json = json!({
-        "content": reply,
-        "message_reference": {
-            "message_id": reply_id
-         }
-    });
-
-    client
-        .post(&url)
-        .header("Authorization", TOKEN_HEADER.get().ok_or(BotError::InternalError)?)
-        .json(&json)
-        .send()
-        .await?
-        .json::<DiscordResult<DiscordMessage>>()
-        .await
-        .map_err(|e| e.into())
-}
-
 fn set_token(token: &str) -> Result<()> {
     TOKEN_HEADER.set(format!("Bot {}", token)).unwrap();
     Ok(())
 }
 
-fn log_message<T: AsRef<str> + Display>(message: T) {
+pub fn log_message<T: AsRef<str> + Display>(message: T) {
     let time = Utc::now();
 
     let formated_time = time.format("%F %T");

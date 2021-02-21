@@ -1,5 +1,10 @@
-pub mod avatar_cache;
+mod avatar_cache;
 pub mod config;
-pub mod error;
+mod error;
 pub mod image_edit;
+/// REST API methods
+pub mod rest;
 pub mod structs;
+
+pub use avatar_cache::AvatarCache;
+pub use error::BotError;

@@ -39,7 +39,7 @@ pub struct Message {
     pub mention_roles: Option<Vec<String>>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct User {
     pub id: String,
     pub username: String,
@@ -104,4 +104,10 @@ pub enum Opcode {
     Hello = 10,
     /// Sent in response to receiving a heartbeat to acknowledge that it has been received.
     HeartbeatAck = 11,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct Ready {
+    pub session_id: String,
+    pub user: User,
 }

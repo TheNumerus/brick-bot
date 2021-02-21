@@ -1,4 +1,5 @@
 use thiserror::Error;
+/// Enum of all possible bot errors
 #[derive(Error, Debug)]
 pub enum BotError {
     #[error(transparent)]
