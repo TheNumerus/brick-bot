@@ -28,13 +28,13 @@ async fn main() -> Result<()> {
 
     let client = reqwest::Client::new();
 
-    let (mut bot, mut rx) = BotBuilder::new().token(config.token.clone()).build()?;
+    let (mut bot, mut event_rx, _status_tx) = BotBuilder::new().token(config.token.clone()).build()?;
     let bot_task = tokio::spawn(async move { bot.run().await });
 
     let bot_id = Arc::new(Mutex::new(None));
 
     let event_handler = tokio::spawn(async move {
-        while let Some(event) = rx.recv().await {
+        while let Some(event) = event_rx.recv().await {
             match event {
                 DiscordEvent::MessageCreate(message) => {
                     // clone all needed stuff

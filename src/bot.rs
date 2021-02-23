@@ -11,7 +11,7 @@ use log::{debug, error, info};
 use serde_json::json;
 use tokio::{
     sync::{
-        mpsc::{error::SendError, UnboundedReceiver, UnboundedSender},
+        mpsc::{error::SendError, Receiver, Sender},
         Mutex,
     },
     task::JoinHandle,
@@ -39,24 +39,27 @@ impl BotBuilder {
     }
 
     /// Builds [`Bot`]
-    pub fn build(&self) -> Result<(Bot, UnboundedReceiver<DiscordEvent>), BotError> {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    pub fn build(&self) -> Result<(Bot, Receiver<DiscordEvent>, Sender<DiscordEvent>), BotError> {
+        let (event_tx, event_rx) = tokio::sync::mpsc::channel(10);
+        let (status_tx, status_rx) = tokio::sync::mpsc::channel(10);
         // check for token
         if let None = self.token {
             return Err(BotError::InternalError(String::from("Cannot build bot without token.")));
         }
 
         let bot = Bot {
-            tx,
+            event_tx,
+            _status_rx: status_rx,
             token: self.token.as_ref().unwrap().clone(),
             state: Arc::new(State::new()),
         };
-        Ok((bot, rx))
+        Ok((bot, event_rx, status_tx))
     }
 }
 
 pub struct Bot {
-    tx: UnboundedSender<DiscordEvent>,
+    event_tx: Sender<DiscordEvent>,
+    _status_rx: Receiver<DiscordEvent>,
     token: String,
     state: Arc<State>,
 }
@@ -65,7 +68,7 @@ impl Bot {
     pub async fn run(&mut self) -> Result<(), BotError> {
         // will enter enother iteration only when discord needs another connection
         loop {
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let (sender_tx, mut sender_rx) = tokio::sync::mpsc::channel(10);
 
             let (ws_stream, _ws_res) = tokio_tungstenite::connect_async("wss://gateway.discord.gg/?v=8&encoding=json")
                 .await
@@ -79,7 +82,7 @@ impl Bot {
             let state_clone = Arc::clone(&self.state);
             // this task will send all messages from channel to websocket stream
             let sender = tokio::spawn(async move {
-                while let Some(m) = rx.recv().await {
+                while let Some(m) = sender_rx.recv().await {
                     // check if connection is even open before we send something
                     if state_clone.connecion_open.load(Ordering::SeqCst) {
                         write.send(m).await?;
@@ -103,12 +106,11 @@ impl Bot {
                     break;
                 }
 
-                let tx = tx.clone();
+                let sender_tx = sender_tx.clone();
+                let event_tx = self.event_tx.clone();
                 let heartbeater = Arc::clone(&heartbeater);
                 let state = Arc::clone(&self.state);
                 let token = self.token.clone();
-
-                let tx_out = self.tx.clone();
 
                 tokio::spawn(async move {
                     // return if close connection
@@ -133,7 +135,7 @@ impl Bot {
                             if let Some(event) = payload.t {
                                 if event == "MESSAGE_CREATE" {
                                     let message: DiscordMessage = serde_json::from_value(payload.d.unwrap()).unwrap();
-                                    tx_out.send(DiscordEvent::MessageCreate(message)).unwrap();
+                                    event_tx.send(DiscordEvent::MessageCreate(message)).await.unwrap();
                                 } else if event == "READY" {
                                     // update session id for resuming later
                                     let data: Ready = serde_json::from_value(
@@ -144,7 +146,7 @@ impl Bot {
 
                                     *state.session_id.lock().await = Some(data.session_id.clone());
 
-                                    tx_out.send(DiscordEvent::Ready(data)).unwrap();
+                                    event_tx.send(DiscordEvent::Ready(data)).await.unwrap();
                                 }
                             }
                         }
@@ -154,7 +156,7 @@ impl Bot {
                                 "op": Opcode::Heartbeat,
                                 "d": state.sequence_number.load(Ordering::SeqCst)
                             });
-                            tx.send(Message::text(hb_message.to_string())).unwrap();
+                            sender_tx.send(Message::text(hb_message.to_string())).await.unwrap();
                         }
                         Opcode::Reconnect => {
                             // try resuming connection
@@ -172,7 +174,7 @@ impl Bot {
                                 })
                             };
 
-                            tx.send(Message::Text(resume.to_string())).unwrap();
+                            sender_tx.send(Message::Text(resume.to_string())).await.unwrap();
                             state.identified.store(true, Ordering::SeqCst);
                         }
                         Opcode::InvalidSession => {
@@ -187,7 +189,7 @@ impl Bot {
 
                             // try new identification
                             let identify_message = create_identify_message(&token);
-                            tx.send(identify_message).unwrap();
+                            sender_tx.send(identify_message).await.unwrap();
                             state.identified.store(true, Ordering::SeqCst);
                         }
                         Opcode::Hello => {
@@ -204,7 +206,7 @@ impl Bot {
                                         "op": Opcode::Heartbeat,
                                         "d": state.sequence_number.load(Ordering::SeqCst)
                                     });
-                                    tx.send(Message::text(hb_message.to_string()))?;
+                                    sender_tx.send(Message::text(hb_message.to_string())).await?;
                                 }
                             }));
                         }
@@ -212,7 +214,7 @@ impl Bot {
                             // on first ack send identify event
                             if !state.identified.load(Ordering::SeqCst) {
                                 let identify_message = create_identify_message(&token);
-                                tx.send(identify_message).unwrap();
+                                sender_tx.send(identify_message).await.unwrap();
                                 state.identified.store(true, Ordering::SeqCst);
                             }
                         }

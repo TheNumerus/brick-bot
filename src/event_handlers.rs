@@ -34,7 +34,7 @@ pub async fn on_message_create(
         }
     };
 
-    if message.content.contains("čtvrtek") && message.author.id != bot_id {
+    if message.content.to_lowercase().contains("čtvrtek") && message.author.id != bot_id {
         let res = send_reply(&client, &message.channel_id, &message.id, "posere tě krtek", &config).await?;
         Result::from(res)?;
         info!("Pooped {}", message.author.username);
