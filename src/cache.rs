@@ -5,7 +5,7 @@ use reqwest::Client;
 
 use crate::{error::BotError, structs::User};
 
-/// Caches avatar images in memory
+/// Caches images in memory based of user avatars
 pub struct AvatarCache {
     storage: HashMap<(String, String), Bytes>,
 }

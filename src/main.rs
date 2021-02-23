@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
 
@@ -21,6 +21,7 @@ async fn main() -> Result<()> {
 
     let config = prepare_config().await?;
     let cache = Arc::new(Mutex::new(AvatarCache::new()));
+    let bricked_cache = Arc::new(Mutex::new(HashMap::new()));
 
     let brick_gif = tokio::fs::read(config.image_path.clone()).await.context("cannot find image on given path")?;
     let brick_gif = Arc::new(brick_gif);
@@ -38,13 +39,14 @@ async fn main() -> Result<()> {
                 DiscordEvent::MessageCreate(message) => {
                     // clone all needed stuff
                     let cache = Arc::clone(&cache);
+                    let bricked_cache = Arc::clone(&bricked_cache);
                     let bot_id = Arc::clone(&bot_id);
                     let brick_gif = Arc::clone(&brick_gif);
                     let client = client.clone();
                     let config = Arc::clone(&config);
 
                     tokio::spawn(async move {
-                        event_handlers::on_message_create(message, &config, client, cache, bot_id, brick_gif).await?;
+                        event_handlers::on_message_create(message, &config, client, cache, bot_id, brick_gif, bricked_cache).await?;
                         Ok::<(), BotError>(())
                     });
                 }

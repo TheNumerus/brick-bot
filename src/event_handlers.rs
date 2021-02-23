@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use brick_bot::{
     config::Config,
@@ -7,7 +7,8 @@ use brick_bot::{
     structs::{DiscordResult, Message},
     AvatarCache, BotError,
 };
-use log::info;
+use bytes::Bytes;
+use log::{debug, info};
 use reqwest::Client;
 use tokio::sync::Mutex;
 
@@ -19,7 +20,11 @@ pub async fn on_message_create(
     avatar_cache: Arc<Mutex<AvatarCache>>,
     bot_id: Arc<Mutex<Option<String>>>,
     brick_gif: Arc<Vec<u8>>,
+    bricked_gifs_cache: Arc<Mutex<HashMap<(String, String), Bytes>>>,
 ) -> Result<(), BotError> {
+    // measure handler time
+    let start = Instant::now();
+
     // need id before anything else
     let bot_id = {
         match &*bot_id.lock().await {
@@ -65,20 +70,40 @@ pub async fn on_message_create(
                 continue;
             }
         }
-
-        let avatar = {
-            let mut lock = avatar_cache.lock().await;
-            let avatar = lock.get(&client, &user).await?.clone();
-            avatar
+        let bricked_gif = {
+            let lock = bricked_gifs_cache.lock().await;
+            lock.get(&(user.id.clone(), user.avatar.clone())).cloned()
         };
 
-        let image = brickify_gif(&brick_gif, &avatar, &config).await?;
+        let bricked_gif = match bricked_gif {
+            Some(gif) => {
+                debug!("Brick gif found in cache");
+                gif
+            }
+            None => {
+                let avatar = {
+                    let mut lock = avatar_cache.lock().await;
+                    let avatar = lock.get(&client, &user).await?.clone();
+                    avatar
+                };
 
-        let image_res: DiscordResult<Message> = send_image(&client, &message.channel_id, &image, &config).await?;
+                let gif = brickify_gif(&brick_gif, &avatar, &config).await?;
+
+                {
+                    let mut lock = bricked_gifs_cache.lock().await;
+                    lock.insert((user.id.clone(), user.avatar.clone()), gif.clone());
+                }
+
+                gif
+            }
+        };
+
+        let image_res: DiscordResult<Message> = send_image(&client, &message.channel_id, &bricked_gif, &config).await?;
         Result::from(image_res)?;
-
         info!("Bricked user \"{}\"", user.username);
     }
+
+    debug!("on_message_create response time: {}s", start.elapsed().as_secs_f32());
 
     Ok(())
 }
