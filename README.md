@@ -4,6 +4,8 @@ Discord bot for when someone says something stupid.
 
 ![brick gif](./readme_example.gif "Logo Title Text 1")
 
+Binary is the bot itself, library contains useful things for building custom bots
+
 ## Usage
 
 Download and run `cargo run --release` in root folder.

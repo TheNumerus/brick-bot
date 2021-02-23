@@ -37,6 +37,7 @@ pub struct Message {
     pub content: String,
     pub mentions: Vec<User>,
     pub mention_roles: Option<Vec<String>>,
+    pub author: User,
 }
 
 #[derive(Deserialize, Debug, Clone)]

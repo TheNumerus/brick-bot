@@ -21,6 +21,22 @@ pub async fn on_message_create(
     bot_id: Arc<Mutex<Option<String>>>,
     brick_gif: Arc<Vec<u8>>,
 ) -> Result<(), BotError> {
+    // need id before anything else
+    let bot_id = {
+        match &*bot_id.lock().await {
+            Some(id) => id.to_owned(),
+            // if it's `None`, event `MESSAGE_CRATE` was recieved before bot was identified, which is impossible
+            None => return Err(BotError::InternalError),
+        }
+    };
+
+    if message.content.contains("čtvrtek") && message.author.id != bot_id {
+        let res = send_reply(&client, &message.channel_id, &message.id, "posere tě krtek", &config).await?;
+        Result::from(res)?;
+        log_message(format!("Pooped {}", message.author.username));
+        return Ok(());
+    }
+
     if !message.content.starts_with(&config.command) {
         return Ok(());
     }
@@ -40,14 +56,6 @@ pub async fn on_message_create(
             }
         }
     }
-
-    let bot_id = {
-        match &*bot_id.lock().await {
-            Some(id) => id.to_owned(),
-            // if it's `None`, event `MESSAGE_CRATE` was recieved before bot was identified, which is impossible
-            None => return Err(BotError::InternalError),
-        }
-    };
 
     // brick everyone mentioned
     for user in message.mentions {
