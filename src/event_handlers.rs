@@ -87,7 +87,7 @@ pub async fn on_message_create(
                     avatar
                 };
 
-                let gif = brickify_gif(&brick_gif, &avatar, &config).await?;
+                let gif = brickify_gif(&brick_gif, &avatar, &config)?;
 
                 {
                     let mut lock = bricked_gifs_cache.lock().await;

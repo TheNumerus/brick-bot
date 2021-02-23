@@ -5,7 +5,7 @@ use crate::config::Config;
 
 use crate::error::BotError;
 
-pub async fn brickify_gif(source: &[u8], avatar: &Bytes, config: &Config) -> Result<Bytes, BotError> {
+pub fn brickify_gif(source: &[u8], avatar: &Bytes, config: &Config) -> Result<Bytes, BotError> {
     let avatar = image::load_from_memory_with_format(avatar.as_ref(), ImageFormat::Png)?;
 
     let (max_x, max_y) = avatar.dimensions();

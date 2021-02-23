@@ -61,6 +61,7 @@ command = "!brick" # bot will respond to this command
 - Bot client is now separate from brick-bot functionality and can be reused for different bots
 - Logging is done through `log` crate
 - Config is now easier to use
+- Bricked gifs cached in memory
 
 ## v0.2.1
 
