@@ -1,5 +1,4 @@
 use std::{
-    fmt::Display,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
@@ -7,8 +6,8 @@ use std::{
     time::Duration,
 };
 
-use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
+use log::{debug, error, info};
 use serde_json::json;
 use tokio::{
     sync::{
@@ -71,7 +70,7 @@ impl Bot {
             let (ws_stream, _ws_res) = tokio_tungstenite::connect_async("wss://gateway.discord.gg/?v=8&encoding=json")
                 .await
                 .map_err(|_e| BotError::InternalError(String::from("Failed to connect to Discord servers.")))?;
-            log_message("WebSocket connected");
+            info!("WebSocket connected");
 
             let (mut write, mut read) = ws_stream.split();
 
@@ -84,6 +83,7 @@ impl Bot {
                     // check if connection is even open before we send something
                     if state_clone.connecion_open.load(Ordering::SeqCst) {
                         write.send(m).await?;
+                        debug!("Sent heartbeat");
                     } else {
                         return Ok(());
                     }
@@ -218,7 +218,7 @@ impl Bot {
                         }
                         Opcode::Identify | Opcode::PresenceUpdate | Opcode::VoiceStateUpdate | Opcode::Resume | Opcode::RequestGuildMembers => {
                             // according to Discord API docs, these opcodes are only sent, not recieveed, so if they are recieved, there is an error/bug
-                            log_message(format!("Recieved unexpected opcode: {:?}", payload.op));
+                            error!("Recieved unexpected opcode: {:?}", payload.op);
                         }
                     }
                     Ok::<(), BotError>(())
@@ -226,9 +226,9 @@ impl Bot {
             }
 
             match sender.await.map_err(|_e| BotError::InternalError(String::from("Task joining error"))) {
-                Ok(_) => log_message("WebSocket reconnecting"),
+                Ok(_) => info!("WebSocket reconnecting"),
                 Err(e) => {
-                    log_message(format!("Error {:#?}", e));
+                    error!("Error {:#?}", e);
                 }
             }
         }
@@ -290,12 +290,4 @@ fn create_identify_message(token: &String) -> Message {
     .to_string();
 
     Message::Text(identify)
-}
-
-pub fn log_message<T: AsRef<str> + Display>(message: T) {
-    let time = Utc::now();
-
-    let formated_time = time.format("%F %T");
-
-    println!("[{}] - {}", formated_time, message);
 }

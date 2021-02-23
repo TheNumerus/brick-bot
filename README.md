@@ -56,6 +56,12 @@ command = "!brick" # bot will respond to this command
 
 ## Changelog
 
+## v0.3
+
+- Bot client is now separate from brick-bot functionality and can be reused for different bots
+- Logging is done through `log` crate
+- Config is now easier to use
+
 ## v0.2.1
 
 - Refactored code
