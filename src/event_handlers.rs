@@ -26,7 +26,7 @@ pub async fn on_message_create(
         match &*bot_id.lock().await {
             Some(id) => id.to_owned(),
             // if it's `None`, event `MESSAGE_CRATE` was recieved before bot was identified, which is impossible
-            None => return Err(BotError::InternalError),
+            None => return Err(BotError::InternalError(String::from("Bot id not set"))),
         }
     };
 

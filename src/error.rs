@@ -8,8 +8,8 @@ pub enum BotError {
     SerdeError(#[from] serde_json::Error),
     #[error(transparent)]
     ImageError(#[from] image::error::ImageError),
-    #[error("Internal Error")]
-    InternalError,
+    #[error("Internal Error: `{0}`")]
+    InternalError(String),
     #[error("Api Error: `{0}`")]
     ApiError(String),
 }

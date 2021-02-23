@@ -112,3 +112,9 @@ pub struct Ready {
     pub session_id: String,
     pub user: User,
 }
+
+#[derive(Debug)]
+pub enum DiscordEvent {
+    MessageCreate(Message),
+    Ready(Ready),
+}

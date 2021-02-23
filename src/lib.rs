@@ -1,4 +1,5 @@
 mod avatar_cache;
+pub mod bot;
 pub mod config;
 mod error;
 pub mod image_edit;
