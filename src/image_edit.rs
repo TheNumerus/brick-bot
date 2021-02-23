@@ -28,7 +28,7 @@ pub async fn brickify_gif(source: &[u8], avatar: &Bytes, config: &Config) -> Res
 
             if (mapped_x > 0) && (mapped_x < max_x) {
                 if (mapped_y > 0) && (mapped_y < max_y) {
-                    if config.use_avatar_alpha.unwrap_or(true) {
+                    if config.use_avatar_alpha {
                         let new_pixel = avatar.get_pixel(mapped_x, mapped_y).0;
                         if new_pixel[3] > 128 {
                             pixel.0[0] = new_pixel[0];

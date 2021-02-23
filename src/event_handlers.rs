@@ -45,12 +45,12 @@ pub async fn on_message_create(
     if message.mentions.is_empty() {
         match message.mention_roles {
             Some(roles) if !roles.is_empty() => {
-                let res = send_reply(&client, &message.channel_id, &message.id, &config.err_msg_tag_role.clone().unwrap(), &config).await?;
+                let res = send_reply(&client, &message.channel_id, &message.id, &config.err_msg_tag_role.clone(), &config).await?;
                 Result::from(res)?;
                 log_message("Error - tagged role");
             }
             _ => {
-                let res = send_reply(&client, &message.channel_id, &message.id, &config.err_msg_tag_nobody.clone().unwrap(), &config).await?;
+                let res = send_reply(&client, &message.channel_id, &message.id, &config.err_msg_tag_nobody.clone(), &config).await?;
                 Result::from(res)?;
                 log_message("Error - tagged nobody");
             }

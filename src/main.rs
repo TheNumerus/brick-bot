@@ -13,8 +13,8 @@ mod event_handlers;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let config = prepare_config().await?;
     let cache = Arc::new(Mutex::new(AvatarCache::new()));
-    let config = Arc::new(prepare_config().await?);
 
     let brick_gif = tokio::fs::read(config.image_path.clone()).await.context("cannot find image on given path")?;
     let brick_gif = Arc::new(brick_gif);
@@ -59,11 +59,12 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn prepare_config() -> Result<Config> {
+async fn prepare_config() -> Result<Arc<Config>> {
     let config = tokio::fs::read_to_string("bot.toml").await.context("Error loading bot configuration.")?;
     let config: Config = toml::from_str(&config).context("Could not parse settings")?;
-    // It's safe to unwrap string options now
-    Ok(config.set_missing())
+
+    let config = Arc::new(config);
+    Ok(config)
 }
 
 pub fn log_message<T: AsRef<str> + Display>(message: T) {

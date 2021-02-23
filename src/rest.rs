@@ -17,7 +17,7 @@ pub async fn send_image(client: &Client, channel_id: &str, image: &Bytes, config
 
     let image_bytes = image.as_ref().to_owned();
 
-    let file_part = Part::bytes(image_bytes).file_name(config.image_name.clone().unwrap());
+    let file_part = Part::bytes(image_bytes).file_name(config.image_name.clone());
 
     let form = Form::new().part("file", file_part);
 
