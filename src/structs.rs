@@ -3,13 +3,13 @@ use serde_repr::*;
 
 use crate::error::BotError;
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct GuildInfo {
     pub id: String,
     pub name: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Channel {
     pub id: String,
     pub name: String,
@@ -18,7 +18,7 @@ pub struct Channel {
     pub last_message_id: Option<String>,
 }
 
-#[derive(Deserialize_repr, Debug, PartialEq)]
+#[derive(Deserialize_repr, Debug, PartialEq, Clone, Copy)]
 #[repr(u8)]
 pub enum ChannelType {
     GuildText = 0,
@@ -30,7 +30,7 @@ pub enum ChannelType {
     Store = 6,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Message {
     pub id: String,
     pub channel_id: String,
@@ -38,6 +38,7 @@ pub struct Message {
     pub mentions: Vec<User>,
     pub mention_roles: Option<Vec<String>>,
     pub author: User,
+    pub reactions: Option<Vec<Reaction>>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -53,7 +54,7 @@ impl User {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum DiscordResult<T> {
     Ok(T),
@@ -80,7 +81,7 @@ pub struct Payload<T = serde_json::Value> {
 /// All gateway events in Discord are tagged with an opcode that denotes the payload type.
 /// Your connection to our gateway may also sometimes close.
 /// When it does, you will receive a close code that tells you what happened.
-#[derive(Debug, Deserialize_repr, Clone, PartialEq, Serialize_repr)]
+#[derive(Debug, Deserialize_repr, Clone, PartialEq, Serialize_repr, Copy)]
 #[repr(u16)]
 pub enum Opcode {
     /// An event was dispatched.
@@ -113,8 +114,42 @@ pub struct Ready {
     pub user: User,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum DiscordEvent {
     MessageCreate(Message),
     Ready(Ready),
+    InteractionCreate(Interaction),
+    ReactionAdd(ReactionAddResponse),
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct Interaction {
+    pub id: String,
+    pub guild_id: String,
+    pub channel_id: String,
+    pub token: String,
+    pub member: serde_json::Value,
+    pub data: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ReactionAddResponse {
+    pub user_id: String,
+    pub channel_id: String,
+    pub message_id: String,
+    pub guild_id: Option<String>,
+    pub emoji: Emoji,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct Reaction {
+    pub emoji: Emoji,
+    pub count: usize,
+    pub me: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct Emoji {
+    pub id: Option<String>,
+    pub name: String,
 }

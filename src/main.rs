@@ -2,7 +2,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
 
-use log::LevelFilter;
+use log::{error, info, LevelFilter};
+use reqwest::Client;
 use simple_logger::SimpleLogger;
 use tokio::sync::Mutex;
 
@@ -26,7 +27,7 @@ async fn main() -> Result<()> {
     let brick_gif = tokio::fs::read(config.image_path.clone()).await.context("cannot find image on given path")?;
     let brick_gif = Arc::new(brick_gif);
 
-    let client = reqwest::Client::new();
+    let client = Client::new();
 
     let (mut bot, mut event_rx, _status_tx) = BotBuilder::new().token(config.token.clone()).build()?;
     let bot_task = tokio::spawn(async move { bot.run().await });
@@ -54,14 +55,31 @@ async fn main() -> Result<()> {
                 DiscordEvent::Ready(ready) => {
                     *bot_id.lock().await = Some(ready.user.id);
                 }
+
+                DiscordEvent::ReactionAdd(reaction) => {
+                    // clone all needed stuff
+                    let cache = Arc::clone(&cache);
+                    let bricked_cache = Arc::clone(&bricked_cache);
+                    let bot_id = Arc::clone(&bot_id);
+                    let brick_gif = Arc::clone(&brick_gif);
+                    let client = client.clone();
+                    let config = Arc::clone(&config);
+
+                    tokio::spawn(async move {
+                        event_handlers::on_reaction_add(reaction, &config, client, cache, bot_id, brick_gif, bricked_cache).await?;
+                        Ok::<(), BotError>(())
+                    });
+                }
+
+                _ => {}
             }
         }
     });
 
     let res = tokio::try_join!(bot_task, event_handler);
     match res {
-        Err(e) => eprintln!("Shutting down with {:?}", e),
-        _ => println!("Shutting down gracefully"),
+        Err(e) => error!("Shutting down with {:?}", e),
+        _ => info!("Shutting down gracefully"),
     }
 
     Ok(())

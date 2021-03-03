@@ -57,3 +57,87 @@ pub async fn send_reply(client: &Client, channel_id: &str, reply_id: &str, reply
         .await
         .map_err(|e| e.into())
 }
+
+pub async fn send_message_to_channel(client: &Client, channel_id: &str, message: &str, config: &Config) -> Result<DiscordResult<Message>, BotError> {
+    let url = format!("https://discord.com/api/channels/{}/messages", channel_id);
+
+    let json = json!({ "content": message });
+
+    let token = format!("Bot {}", config.token);
+
+    client
+        .post(&url)
+        .header("Authorization", token)
+        .json(&json)
+        .send()
+        .await?
+        .json::<DiscordResult<Message>>()
+        .await
+        .map_err(|e| e.into())
+}
+
+pub async fn send_interaction_response(
+    client: &Client,
+    interaction_id: &str,
+    interaction_token: &str,
+    config: &Config,
+    reply: Option<&str>,
+) -> Result<String, BotError> {
+    let url = format!("https://discord.com/api/v8/interactions/{}/{}/callback", interaction_id, interaction_token);
+
+    let json = match reply {
+        Some(message) => {
+            json!({
+                "type": 3,
+                "data": {"content": message}
+            })
+        }
+        None => {
+            json!({
+                "type": 5
+            })
+        }
+    };
+
+    let token = format!("Bot {}", config.token);
+
+    client
+        .post(&url)
+        .header("Authorization", token)
+        .json(&json)
+        .send()
+        .await?
+        .text()
+        .await
+        .map_err(|e| e.into())
+}
+
+pub async fn get_message_from_channel(client: &Client, config: &Config, channel_id: &str, message_id: &str) -> Result<DiscordResult<Message>, BotError> {
+    let url = format!("https://discord.com/api/channels/{}/messages/{}", channel_id, message_id);
+    let token = format!("Bot {}", config.token);
+
+    client
+        .get(&url)
+        .header("Authorization", token)
+        .send()
+        .await?
+        .json::<DiscordResult<Message>>()
+        .await
+        .map_err(|e| e.into())
+}
+
+pub async fn register_commands(client: &Client, config: &Config, command: &serde_json::Value, app_id: &str) -> Result<String, BotError> {
+    let token = format!("Bot {}", config.token);
+
+    let url = format!("https://discord.com/api/applications/{}/commands", app_id);
+
+    client
+        .post(&url)
+        .header("Authorization", token)
+        .json(&command)
+        .send()
+        .await?
+        .text()
+        .await
+        .map_err(|e| e.into())
+}
