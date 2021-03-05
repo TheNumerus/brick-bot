@@ -19,7 +19,7 @@ use tokio::{
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::{
-    structs::{DiscordEvent, Interaction, Message as DiscordMessage, Opcode, Payload, ReactionAddResponse, Ready},
+    structs::{DiscordEvent, Interaction, Message as DiscordMessage, Opcode, Payload, ReactionAddResponse, Ready, Status},
     BotError,
 };
 
@@ -39,7 +39,7 @@ impl BotBuilder {
     }
 
     /// Builds [`Bot`]
-    pub fn build(&self) -> Result<(Bot, Receiver<DiscordEvent>, Sender<DiscordEvent>), BotError> {
+    pub fn build(&self) -> Result<(Bot, Receiver<DiscordEvent>, Sender<Status>), BotError> {
         let (event_tx, event_rx) = tokio::sync::mpsc::channel(10);
         let (status_tx, status_rx) = tokio::sync::mpsc::channel(10);
         // check for token
@@ -49,7 +49,7 @@ impl BotBuilder {
 
         let bot = Bot {
             event_tx,
-            _status_rx: status_rx,
+            status_rx: Some(status_rx),
             token: self.token.as_ref().unwrap().clone(),
             state: Arc::new(State::new()),
         };
@@ -59,13 +59,16 @@ impl BotBuilder {
 
 pub struct Bot {
     event_tx: Sender<DiscordEvent>,
-    _status_rx: Receiver<DiscordEvent>,
+    status_rx: Option<Receiver<Status>>,
     token: String,
     state: Arc<State>,
 }
 
 impl Bot {
     pub async fn run(&mut self) -> Result<(), BotError> {
+        // start state changer
+        let state_rx = Arc::new(Mutex::new(self.status_rx.take().unwrap()));
+
         // will enter enother iteration only when discord needs another connection
         loop {
             let (sender_tx, mut sender_rx) = tokio::sync::mpsc::channel(10);
@@ -86,12 +89,33 @@ impl Bot {
                     // check if connection is even open before we send something
                     if state_clone.connecion_open.load(Ordering::SeqCst) {
                         write.send(m).await?;
-                        debug!("Sent heartbeat");
+                        debug!("Sent payload");
                     } else {
                         return Ok(());
                     }
                 }
                 Ok::<(), tokio_tungstenite::tungstenite::error::Error>(())
+            });
+
+            let state = Arc::clone(&self.state);
+            let state_rx = Arc::clone(&state_rx);
+            let sender_tx_clone = sender_tx.clone();
+            let state_changer = tokio::spawn(async move {
+                while let Some(new_state) = {
+                    let x = state_rx.lock().await.recv().await;
+                    x
+                } {
+                    if state.identified.load(Ordering::SeqCst) {
+                        let json = json!({
+                            "op": Opcode::PresenceUpdate,
+                            "d": new_state
+                        });
+                        sender_tx_clone.send(Message::text(json.to_string())).await?;
+                    } else {
+                        return Ok::<_, SendError<Message>>(state_rx);
+                    }
+                }
+                Ok::<_, SendError<Message>>(state_rx)
             });
 
             // maybe something could be done to infer this type
@@ -115,9 +139,13 @@ impl Bot {
                         // return if close connection
                         // message is always Ok(_) here
                         let message = message.unwrap();
-                        if let Message::Close(_) = message {
+                        if let Message::Close(frame) = message {
                             state.connecion_open.store(false, Ordering::SeqCst);
                             info!("Connection closed");
+                            if let Some(frame) = frame {
+                                error!("Error {}: {}", frame.code, frame.reason);
+                            }
+
                             return Ok(());
                         }
 
@@ -222,6 +250,7 @@ impl Bot {
                                             "d": state.sequence_number.load(Ordering::SeqCst)
                                         });
                                         sender_tx.send(Message::text(hb_message.to_string())).await?;
+                                        debug!("Sent heartbeat");
                                     }
                                 }));
                             }

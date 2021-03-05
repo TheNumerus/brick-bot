@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_repr::*;
 
 use crate::error::BotError;
@@ -152,4 +152,49 @@ pub struct Reaction {
 pub struct Emoji {
     pub id: Option<String>,
     pub name: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct Status {
+    pub status: StatusType,
+    pub activities: Option<Vec<Activity>>,
+    pub afk: bool,
+    pub since: Option<usize>,
+}
+
+impl Status {
+    pub fn new(status_type: StatusType, name: impl AsRef<str>) -> Self {
+        let mut activities = Vec::with_capacity(1);
+        activities.push(Activity {
+            name: String::from(name.as_ref()),
+            activity_type: 0,
+        });
+        Self {
+            status: status_type,
+            activities: Some(activities),
+            afk: false,
+            since: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Copy)]
+pub enum StatusType {
+    #[serde(rename = "online")]
+    Online,
+    #[serde(rename = "dnd")]
+    DoNotDisturb,
+    #[serde(rename = "idle")]
+    Idle,
+    #[serde(rename = "invisible")]
+    Invisible,
+    #[serde(rename = "offline")]
+    Offline,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct Activity {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub activity_type: usize,
 }

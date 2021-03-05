@@ -7,7 +7,12 @@ use reqwest::Client;
 use simple_logger::SimpleLogger;
 use tokio::sync::Mutex;
 
-use brick_bot::{bot::BotBuilder, config::Config, structs::DiscordEvent, AvatarCache, BotError};
+use brick_bot::{
+    bot::BotBuilder,
+    config::Config,
+    structs::{DiscordEvent, Status, StatusType},
+    AvatarCache, BotError,
+};
 
 /// event handlers specific to brick-bot behaviour
 mod event_handlers;
@@ -50,6 +55,7 @@ async fn main() -> Result<()> {
                         event_handlers::on_message_create(message, &config, client, cache, bot_id, brick_gif, bricked_cache).await?;
                         Ok::<(), BotError>(())
                     });
+                    _status_tx.send(Status::new(StatusType::Online, "🦆 quack")).await.unwrap();
                 }
 
                 DiscordEvent::Ready(ready) => {
