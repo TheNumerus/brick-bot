@@ -8,7 +8,8 @@ use std::{
 
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info};
-use serde_json::json;
+use serde::de::DeserializeOwned;
+use serde_json::{json, Value};
 use tokio::{
     sync::{
         mpsc::{error::SendError, Receiver, Sender},
@@ -100,7 +101,7 @@ impl Bot {
             let state = Arc::clone(&self.state);
             let state_rx = Arc::clone(&state_rx);
             let sender_tx_clone = sender_tx.clone();
-            let state_changer = tokio::spawn(async move {
+            let _state_changer = tokio::spawn(async move {
                 while let Some(new_state) = {
                     let x = state_rx.lock().await.recv().await;
                     x
@@ -128,6 +129,8 @@ impl Bot {
                     break;
                 }
 
+                let message = message.unwrap();
+
                 let sender_tx = sender_tx.clone();
                 let event_tx = self.event_tx.clone();
                 let heartbeater = Arc::clone(&heartbeater);
@@ -135,140 +138,7 @@ impl Bot {
                 let token = self.token.clone();
 
                 tokio::spawn(async move {
-                    let response_result = {
-                        // return if close connection
-                        // message is always Ok(_) here
-                        let message = message.unwrap();
-                        if let Message::Close(frame) = message {
-                            state.connecion_open.store(false, Ordering::SeqCst);
-                            info!("Connection closed");
-                            if let Some(frame) = frame {
-                                error!("Error {}: {}", frame.code, frame.reason);
-                            }
-
-                            return Ok(());
-                        }
-
-                        let msg = message.to_string();
-                        let payload: Payload = serde_json::from_str(&msg).unwrap();
-
-                        match &payload.op {
-                            Opcode::Dispatch => {
-                                // handle all events here
-
-                                // update seq number
-                                let s = payload.s.to_owned().unwrap();
-                                state.sequence_number.store(s, Ordering::SeqCst);
-
-                                if let Some(event) = payload.t {
-                                    debug!("Recieved event \"{}\"", event);
-                                    if event == "MESSAGE_CREATE" {
-                                        let message: DiscordMessage = serde_json::from_value(payload.d.unwrap()).unwrap();
-                                        event_tx.send(DiscordEvent::MessageCreate(message)).await.unwrap();
-                                    } else if event == "READY" {
-                                        // update session id for resuming later
-                                        let data: Ready = serde_json::from_value(
-                                            payload
-                                                .d
-                                                .ok_or_else(|| BotError::ApiError(String::from("event READY did not contain any data")))?,
-                                        )?;
-
-                                        *state.session_id.lock().await = Some(data.session_id.clone());
-
-                                        event_tx.send(DiscordEvent::Ready(data)).await.unwrap();
-                                    } else if event == "INTERACTION_CREATE" {
-                                        let interaction: Interaction = serde_json::from_value(
-                                            payload
-                                                .d
-                                                .ok_or_else(|| BotError::ApiError(String::from("event INTERACTION_CREATE did not contain any data")))?,
-                                        )?;
-                                        event_tx.send(DiscordEvent::InteractionCreate(interaction)).await.unwrap();
-                                    } else if event == "MESSAGE_REACTION_ADD" {
-                                        let reaction: ReactionAddResponse = serde_json::from_value(
-                                            payload
-                                                .d
-                                                .ok_or_else(|| BotError::ApiError(String::from("event MESSAGE_REACTION_ADD did not contain any data")))?,
-                                        )?;
-                                        event_tx.send(DiscordEvent::ReactionAdd(reaction)).await.unwrap();
-                                    }
-                                }
-                            }
-                            Opcode::Heartbeat => {
-                                // send new heartbeat on request
-                                let hb_message = json! ({
-                                    "op": Opcode::Heartbeat,
-                                    "d": state.sequence_number.load(Ordering::SeqCst)
-                                });
-                                sender_tx.send(Message::text(hb_message.to_string())).await.unwrap();
-                            }
-                            Opcode::Reconnect => {
-                                // try resuming connection
-                                let resume = {
-                                    let lock = state.session_id.lock().await;
-                                    let session_id = (*lock).as_ref().unwrap();
-
-                                    json!({
-                                        "op": Opcode::Resume,
-                                        "d": {
-                                            "token": &token,
-                                            "session_id": session_id,
-                                            "seq": state.sequence_number.load(Ordering::SeqCst),
-                                        }
-                                    })
-                                };
-
-                                sender_tx.send(Message::Text(resume.to_string())).await.unwrap();
-                                state.identified.store(true, Ordering::SeqCst);
-                            }
-                            Opcode::InvalidSession => {
-                                // check if session can be resumed
-                                let resumable = payload.d.unwrap().as_bool().unwrap();
-                                if !resumable {
-                                    // Reset connection
-                                    heartbeater.lock().await.take().unwrap().abort();
-                                    state.connecion_open.store(false, Ordering::SeqCst);
-                                    return Ok(());
-                                }
-
-                                // try new identification
-                                let identify_message = create_identify_message(&token);
-                                sender_tx.send(identify_message).await.unwrap();
-                                state.identified.store(true, Ordering::SeqCst);
-                            }
-                            Opcode::Hello => {
-                                // setup heartbeater on first reply
-                                let heartbeat = payload.d.unwrap()["heartbeat_interval"].as_u64().unwrap();
-                                state.connecion_open.store(true, Ordering::SeqCst);
-                                let state = Arc::clone(&state);
-
-                                *heartbeater.lock().await = Some(tokio::spawn(async move {
-                                    let mut interval = tokio::time::interval(Duration::from_millis(heartbeat));
-                                    loop {
-                                        interval.tick().await;
-                                        let hb_message = json! ({
-                                            "op": Opcode::Heartbeat,
-                                            "d": state.sequence_number.load(Ordering::SeqCst)
-                                        });
-                                        sender_tx.send(Message::text(hb_message.to_string())).await?;
-                                        debug!("Sent heartbeat");
-                                    }
-                                }));
-                            }
-                            Opcode::HeartbeatAck => {
-                                // on first ack send identify event
-                                if !state.identified.load(Ordering::SeqCst) {
-                                    let identify_message = create_identify_message(&token);
-                                    sender_tx.send(identify_message).await.unwrap();
-                                    state.identified.store(true, Ordering::SeqCst);
-                                }
-                            }
-                            Opcode::Identify | Opcode::PresenceUpdate | Opcode::VoiceStateUpdate | Opcode::Resume | Opcode::RequestGuildMembers => {
-                                // according to Discord API docs, these opcodes are only sent, not recieveed, so if they are recieved, there is an error/bug
-                                error!("Recieved unexpected opcode: {:?}", payload.op);
-                            }
-                        }
-                        Ok::<(), BotError>(())
-                    };
+                    let response_result = Self::handle_message(message, state, event_tx, sender_tx, token, heartbeater).await;
                     if let Err(err) = response_result {
                         error!("{:#?}", err);
                     }
@@ -283,6 +153,143 @@ impl Bot {
                 }
             }
         }
+    }
+
+    async fn handle_message(
+        message: Message,
+        state: Arc<State>,
+        event_tx: Sender<DiscordEvent>,
+        sender_tx: Sender<Message>,
+        token: String,
+        heartbeater: Arc<Mutex<Option<JoinHandle<Result<(), SendError<Message>>>>>>,
+    ) -> Result<(), BotError> {
+        // return if connection closed
+        if let Message::Close(frame) = message {
+            state.connecion_open.store(false, Ordering::SeqCst);
+            info!("Connection closed");
+            if let Some(frame) = frame {
+                error!("Error {}: {}", frame.code, frame.reason);
+            }
+
+            return Ok(());
+        }
+
+        let msg = message.to_string();
+        let payload: Payload = serde_json::from_str(&msg).unwrap();
+
+        match &payload.op {
+            Opcode::Dispatch => {
+                // handle all events here
+
+                // update seq number
+                let s = payload.s.to_owned().unwrap();
+                state.sequence_number.store(s, Ordering::SeqCst);
+
+                let event_name = payload.t.ok_or_else(|| BotError::ApiError(String::from("recieved event without name")))?;
+                debug!("Recieved event \"{}\"", event_name);
+
+                match event_name.as_str() {
+                    "MESSAGE_CREATE" => {
+                        let message: DiscordMessage = serde_json::from_value(payload.d.unwrap()).unwrap();
+                        event_tx.send(DiscordEvent::MessageCreate(message)).await.unwrap();
+                    }
+                    "READY" => {
+                        let ready: Ready = payload_data_to_exact_type(payload.d, &event_name)?;
+
+                        // update session id for resuming later
+                        *state.session_id.lock().await = Some(ready.session_id.clone());
+
+                        event_tx.send(DiscordEvent::Ready(ready)).await.unwrap();
+                    }
+                    "INTERACTION_CREATE" => {
+                        let interaction: Interaction = payload_data_to_exact_type(payload.d, &event_name)?;
+                        event_tx.send(DiscordEvent::InteractionCreate(interaction)).await.unwrap();
+                    }
+                    "MESSAGE_REACTION_ADD" => {
+                        let reaction: ReactionAddResponse = payload_data_to_exact_type(payload.d, &event_name)?;
+                        event_tx.send(DiscordEvent::ReactionAdd(reaction)).await.unwrap();
+                    }
+                    _ => {
+                        info!("Recieved unsupported event {}", event_name);
+                        return Ok(());
+                    }
+                }
+            }
+            Opcode::Heartbeat => {
+                // send new heartbeat on request
+                let hb_message = json! ({
+                    "op": Opcode::Heartbeat,
+                    "d": state.sequence_number.load(Ordering::SeqCst)
+                });
+                sender_tx.send(Message::text(hb_message.to_string())).await.unwrap();
+            }
+            Opcode::Reconnect => {
+                // try resuming connection
+                let resume = {
+                    let lock = state.session_id.lock().await;
+                    let session_id = (*lock).as_ref().unwrap();
+
+                    json!({
+                        "op": Opcode::Resume,
+                        "d": {
+                            "token": &token,
+                            "session_id": session_id,
+                            "seq": state.sequence_number.load(Ordering::SeqCst),
+                        }
+                    })
+                };
+
+                sender_tx.send(Message::Text(resume.to_string())).await.unwrap();
+                state.identified.store(true, Ordering::SeqCst);
+            }
+            Opcode::InvalidSession => {
+                // check if session can be resumed
+                let resumable = payload.d.unwrap().as_bool().unwrap();
+                if !resumable {
+                    // Reset connection
+                    heartbeater.lock().await.take().unwrap().abort();
+                    state.connecion_open.store(false, Ordering::SeqCst);
+                    return Ok(());
+                }
+
+                // try new identification
+                let identify_message = create_identify_message(&token);
+                sender_tx.send(identify_message).await.unwrap();
+                state.identified.store(true, Ordering::SeqCst);
+            }
+            Opcode::Hello => {
+                // setup heartbeater on first reply
+                let heartbeat = payload.d.unwrap()["heartbeat_interval"].as_u64().unwrap();
+                state.connecion_open.store(true, Ordering::SeqCst);
+                let state = Arc::clone(&state);
+
+                *heartbeater.lock().await = Some(tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(Duration::from_millis(heartbeat));
+                    loop {
+                        interval.tick().await;
+                        let hb_message = json! ({
+                            "op": Opcode::Heartbeat,
+                            "d": state.sequence_number.load(Ordering::SeqCst)
+                        });
+                        sender_tx.send(Message::text(hb_message.to_string())).await?;
+                        debug!("Sent heartbeat");
+                    }
+                }));
+            }
+            Opcode::HeartbeatAck => {
+                // on first ack send identify event
+                if !state.identified.load(Ordering::SeqCst) {
+                    let identify_message = create_identify_message(&token);
+                    sender_tx.send(identify_message).await.unwrap();
+                    state.identified.store(true, Ordering::SeqCst);
+                }
+            }
+            Opcode::Identify | Opcode::PresenceUpdate | Opcode::VoiceStateUpdate | Opcode::Resume | Opcode::RequestGuildMembers => {
+                // according to Discord API docs, these opcodes are only sent, not recieveed, so if they are recieved, there is an error/bug
+                error!("Recieved unexpected opcode: {:?}", payload.op);
+            }
+        }
+        Ok::<(), BotError>(())
     }
 }
 
@@ -341,4 +348,20 @@ fn create_identify_message(token: &String) -> Message {
     .to_string();
 
     Message::Text(identify)
+}
+
+fn payload_data_to_exact_type<T>(data: Option<Value>, event_name: &str) -> Result<T, BotError>
+where
+    T: DeserializeOwned,
+{
+    match data {
+        Some(data) => {
+            let deserialized: T = serde_json::from_value(data)?;
+            Ok(deserialized)
+        }
+        None => {
+            let err_msg = format!("event {} did not contain any data", event_name);
+            Err(BotError::ApiError(err_msg))
+        }
+    }
 }
