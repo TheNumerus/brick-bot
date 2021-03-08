@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
@@ -138,24 +139,12 @@ impl Bot {
                 let token = self.token.clone();
 
                 tokio::spawn(async move {
-                    let payload_str = match message {
-                        Message::Text(payload_str) => payload_str,
-                        Message::Binary(_) => {
-                            error!("Bot recieved binary message. Binary messages are not supported");
-                            return;
-                        }
-                        // ignore these
-                        Message::Ping(_) | Message::Pong(_) => {
-                            return;
-                        }
-                        Message::Close(frame) => {
-                            // return if connection closed
-                            state.connecion_open.store(false, Ordering::SeqCst);
-                            info!("Connection closed");
-                            if let Some(frame) = frame {
-                                error!("Error {}: {}", frame.code, frame.reason);
-                            }
-
+                    let payload_str = get_payload_from_ws_message(message, &state);
+                    let payload_str = match payload_str {
+                        MessageParseResult::Ok(s) => s,
+                        MessageParseResult::Ignored => return,
+                        MessageParseResult::Err(err) => {
+                            error!("{}", err);
                             return;
                         }
                     };
@@ -392,5 +381,32 @@ where
             let err_msg = format!("event {} did not contain any data", event_name);
             Err(BotError::ApiError(err_msg))
         }
+    }
+}
+
+enum MessageParseResult {
+    Ok(String),
+    Ignored,
+    Err(Cow<'static, str>),
+}
+
+fn get_payload_from_ws_message(message: Message, state: &Arc<State>) -> MessageParseResult {
+    use MessageParseResult::*;
+
+    match message {
+        Message::Text(payload_str) => Ok(payload_str),
+        Message::Binary(_) => Err(Cow::from("Bot recieved binary message. Binary messages are not supported")),
+        Message::Close(frame) => {
+            // return if connection closed
+            state.connecion_open.store(false, Ordering::SeqCst);
+            info!("Connection closed");
+            if let Some(frame) = frame {
+                Err(Cow::from(format!("Error {}: {}", frame.code, frame.reason)))
+            } else {
+                Ignored
+            }
+        }
+        // ignore these
+        Message::Ping(_) | Message::Pong(_) => Ignored,
     }
 }
