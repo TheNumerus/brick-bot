@@ -138,11 +138,41 @@ impl Bot {
                 let token = self.token.clone();
 
                 tokio::spawn(async move {
-                    let response_result = Self::handle_message(message, state, event_tx, sender_tx, token, heartbeater).await;
-                    if let Err(err) = response_result {
+                    let payload_str = match message {
+                        Message::Text(payload_str) => payload_str,
+                        Message::Binary(_) => {
+                            error!("Bot recieved binary message. Binary messages are not supported");
+                            return;
+                        }
+                        // ignore these
+                        Message::Ping(_) | Message::Pong(_) => {
+                            return;
+                        }
+                        Message::Close(frame) => {
+                            // return if connection closed
+                            state.connecion_open.store(false, Ordering::SeqCst);
+                            info!("Connection closed");
+                            if let Some(frame) = frame {
+                                error!("Error {}: {}", frame.code, frame.reason);
+                            }
+
+                            return;
+                        }
+                    };
+
+                    let payload = serde_json::from_str::<Payload>(&payload_str);
+                    let payload = match payload {
+                        Ok(payload) => payload,
+                        Err(err) => {
+                            error!("Cannot parse payload from API. {:#?}", err);
+                            return;
+                        }
+                    };
+
+                    let command_result = Self::handle_command(payload, state, event_tx, sender_tx, token, heartbeater).await;
+                    if let Err(err) = command_result {
                         error!("{:#?}", err);
                     }
-                    Ok::<(), BotError>(())
                 });
             }
 
@@ -155,65 +185,64 @@ impl Bot {
         }
     }
 
-    async fn handle_message(
-        message: Message,
+    /// Method for hadling dispatch command
+    async fn handle_dispatch(payload: Payload, state: Arc<State>, event_tx: Sender<DiscordEvent>) -> Result<(), BotError> {
+        let Payload {
+            s: seq_num,
+            d: data,
+            t: event_name,
+            .. // don't care about opcode
+        } = payload;
+
+        // update seq number
+        let seq_num = seq_num.ok_or_else(|| BotError::ApiError(String::from("recieved event without sequence number")))?;
+        state.sequence_number.store(seq_num, Ordering::SeqCst);
+
+        let event_name = event_name.ok_or_else(|| BotError::ApiError(String::from("recieved event without name")))?;
+        debug!("Recieved event \"{}\"", event_name);
+
+        match event_name.as_str() {
+            "MESSAGE_CREATE" => {
+                let message: DiscordMessage = payload_data_to_exact_type(data, &event_name)?;
+                event_tx.send(DiscordEvent::MessageCreate(message)).await.unwrap();
+            }
+            "READY" => {
+                let ready: Ready = payload_data_to_exact_type(data, &event_name)?;
+
+                // update session id for resuming later
+                *state.session_id.lock().await = Some(ready.session_id.clone());
+
+                event_tx.send(DiscordEvent::Ready(ready)).await.unwrap();
+            }
+            "INTERACTION_CREATE" => {
+                let interaction: Interaction = payload_data_to_exact_type(data, &event_name)?;
+                event_tx.send(DiscordEvent::InteractionCreate(interaction)).await.unwrap();
+            }
+            "MESSAGE_REACTION_ADD" => {
+                let reaction: ReactionAddResponse = payload_data_to_exact_type(data, &event_name)?;
+                event_tx.send(DiscordEvent::ReactionAdd(reaction)).await.unwrap();
+            }
+            // add more events as needed
+            _ => {
+                info!("Recieved unsupported event {}", event_name);
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    /// Method for handling all commands
+    async fn handle_command(
+        payload: Payload,
         state: Arc<State>,
         event_tx: Sender<DiscordEvent>,
         sender_tx: Sender<Message>,
         token: String,
         heartbeater: Arc<Mutex<Option<JoinHandle<Result<(), SendError<Message>>>>>>,
     ) -> Result<(), BotError> {
-        // return if connection closed
-        if let Message::Close(frame) = message {
-            state.connecion_open.store(false, Ordering::SeqCst);
-            info!("Connection closed");
-            if let Some(frame) = frame {
-                error!("Error {}: {}", frame.code, frame.reason);
-            }
-
-            return Ok(());
-        }
-
-        let msg = message.to_string();
-        let payload: Payload = serde_json::from_str(&msg).unwrap();
-
         match &payload.op {
             Opcode::Dispatch => {
-                // handle all events here
-
-                // update seq number
-                let s = payload.s.to_owned().unwrap();
-                state.sequence_number.store(s, Ordering::SeqCst);
-
-                let event_name = payload.t.ok_or_else(|| BotError::ApiError(String::from("recieved event without name")))?;
-                debug!("Recieved event \"{}\"", event_name);
-
-                match event_name.as_str() {
-                    "MESSAGE_CREATE" => {
-                        let message: DiscordMessage = serde_json::from_value(payload.d.unwrap()).unwrap();
-                        event_tx.send(DiscordEvent::MessageCreate(message)).await.unwrap();
-                    }
-                    "READY" => {
-                        let ready: Ready = payload_data_to_exact_type(payload.d, &event_name)?;
-
-                        // update session id for resuming later
-                        *state.session_id.lock().await = Some(ready.session_id.clone());
-
-                        event_tx.send(DiscordEvent::Ready(ready)).await.unwrap();
-                    }
-                    "INTERACTION_CREATE" => {
-                        let interaction: Interaction = payload_data_to_exact_type(payload.d, &event_name)?;
-                        event_tx.send(DiscordEvent::InteractionCreate(interaction)).await.unwrap();
-                    }
-                    "MESSAGE_REACTION_ADD" => {
-                        let reaction: ReactionAddResponse = payload_data_to_exact_type(payload.d, &event_name)?;
-                        event_tx.send(DiscordEvent::ReactionAdd(reaction)).await.unwrap();
-                    }
-                    _ => {
-                        info!("Recieved unsupported event {}", event_name);
-                        return Ok(());
-                    }
-                }
+                Self::handle_dispatch(payload, state, event_tx).await?;
             }
             Opcode::Heartbeat => {
                 // send new heartbeat on request
@@ -286,10 +315,10 @@ impl Bot {
             }
             Opcode::Identify | Opcode::PresenceUpdate | Opcode::VoiceStateUpdate | Opcode::Resume | Opcode::RequestGuildMembers => {
                 // according to Discord API docs, these opcodes are only sent, not recieveed, so if they are recieved, there is an error/bug
-                error!("Recieved unexpected opcode: {:?}", payload.op);
+                return Err(BotError::ApiError(format!("Recieved unexpected opcode: {:?}", payload.op)));
             }
         }
-        Ok::<(), BotError>(())
+        Ok(())
     }
 }
 
