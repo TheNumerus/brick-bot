@@ -120,8 +120,7 @@ impl Bot {
                 Ok::<_, SendError<Message>>(state_rx)
             });
 
-            // maybe something could be done to infer this type
-            let heartbeater: Arc<Mutex<Option<JoinHandle<Result<(), SendError<Message>>>>>> = Arc::new(Mutex::new(None));
+            let heartbeater = Arc::new(Mutex::new(None));
 
             while let Some(message) = read.next().await {
                 // close on error
@@ -227,7 +226,7 @@ impl Bot {
         event_tx: Sender<DiscordEvent>,
         sender_tx: Sender<Message>,
         token: String,
-        heartbeater: Arc<Mutex<Option<JoinHandle<Result<(), SendError<Message>>>>>>,
+        heartbeater: Arc<Mutex<Option<JoinHandle<()>>>>,
     ) -> Result<(), BotError> {
         match &payload.op {
             Opcode::Dispatch => {
@@ -289,7 +288,11 @@ impl Bot {
                             "op": Opcode::Heartbeat,
                             "d": state.sequence_number.load(Ordering::SeqCst)
                         });
-                        sender_tx.send(Message::text(hb_message.to_string())).await?;
+                        let send_res = sender_tx.send(Message::text(hb_message.to_string())).await;
+                        if let Err(_) = send_res {
+                            error!("Channel for sending commands closed.");
+                            return;
+                        }
                         debug!("Sent heartbeat");
                     }
                 }));
