@@ -71,7 +71,7 @@ pub async fn on_message_create(
             }
         }
 
-        let bricked_gif = gen_brick_gif(&bricked_gifs_cache, &message.author, &avatar_cache, &client, &brick_gif, config).await?;
+        let bricked_gif = gen_brick_gif(&bricked_gifs_cache, &user, &avatar_cache, &client, &brick_gif, config).await?;
 
         let image_res: DiscordResult<Message> = send_image(&client, &message.channel_id, &bricked_gif, &config).await?;
         Result::from(image_res)?;
