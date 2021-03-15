@@ -21,7 +21,10 @@ use tokio::{
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::{
-    structs::{DiscordEvent, Interaction, Message as DiscordMessage, Opcode, Payload, ReactionAddResponse, Ready, Status},
+    structs::{
+        DiscordEvent, Interaction, Message as DiscordMessage, MessageDeleteResponse, Opcode, Payload, ReactionAddResponse, ReactionRemoveResponse, Ready,
+        Status,
+    },
     BotError,
 };
 
@@ -120,13 +123,23 @@ impl Bot {
                 Ok::<_, SendError<Message>>(state_rx)
             });
 
-            let heartbeater = Arc::new(Mutex::new(None));
+            let heartbeater: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::new(Mutex::new(None));
 
-            while let Some(message) = read.next().await {
+            'msg: while let Some(message) = read.next().await {
                 // close on error
-                if let Err(_) = message {
+                if let Err(ws_err) = message {
                     self.state.connecion_open.store(false, Ordering::SeqCst);
-                    break;
+
+                    use tokio_tungstenite::tungstenite::error::Error;
+                    if let Error::ConnectionClosed = ws_err {
+                        // this is normal, don't print anything
+                    } else {
+                        error!("{}", ws_err)
+                    }
+
+                    heartbeater.lock().await.as_mut().unwrap().abort();
+                    sender.abort();
+                    break 'msg;
                 }
 
                 let message = message.unwrap();
@@ -164,12 +177,19 @@ impl Bot {
                 });
             }
 
-            match sender.await.map_err(|_e| BotError::InternalError(String::from("Task joining error"))) {
-                Ok(_) => info!("WebSocket reconnecting"),
-                Err(e) => {
-                    error!("Error {:#?}", e);
+            match sender.await {
+                Ok(sender_res) => {
+                    if let Err(e) = sender_res {
+                        error!("{}", e);
+                    }
+                }
+                Err(join_err) => {
+                    if !join_err.is_cancelled() {
+                        error!("{}", join_err);
+                    }
                 }
             }
+            info!("WebSocket disconected");
         }
     }
 
@@ -194,6 +214,14 @@ impl Bot {
                 let message: DiscordMessage = payload_data_to_exact_type(data, &event_name)?;
                 event_tx.send(DiscordEvent::MessageCreate(message)).await.unwrap();
             }
+            "MESSAGE_UPDATE" => {
+                let message: DiscordMessage = payload_data_to_exact_type(data, &event_name)?;
+                event_tx.send(DiscordEvent::MessageUpdate(message)).await.unwrap();
+            }
+            "MESSAGE_DELETE" => {
+                let message_info: MessageDeleteResponse = payload_data_to_exact_type(data, &event_name)?;
+                event_tx.send(DiscordEvent::MessageDelete(message_info)).await.unwrap();
+            }
             "READY" => {
                 let ready: Ready = payload_data_to_exact_type(data, &event_name)?;
 
@@ -209,6 +237,10 @@ impl Bot {
             "MESSAGE_REACTION_ADD" => {
                 let reaction: ReactionAddResponse = payload_data_to_exact_type(data, &event_name)?;
                 event_tx.send(DiscordEvent::ReactionAdd(reaction)).await.unwrap();
+            }
+            "MESSAGE_REACTION_REMOVE" => {
+                let reaction: ReactionRemoveResponse = payload_data_to_exact_type(data, &event_name)?;
+                event_tx.send(DiscordEvent::ReactionRemove(reaction)).await.unwrap();
             }
             // add more events as needed
             _ => {
@@ -342,9 +374,6 @@ impl State {
 }
 
 fn create_identify_message(token: &String) -> Message {
-    // TODO move to config
-    let activity_name = "Brickity brick 🧱";
-
     let identify = json!({
         "op": Opcode::Identify,
         "d": {
@@ -354,16 +383,7 @@ fn create_identify_message(token: &String) -> Message {
                 "$os": "windows",
                 "$browser": "brick-bot",
                 "$device": "brick-bot"
-            },
-            "presence": {
-                "activities": [{
-                    "name": activity_name,
-                    "type": 0
-                }],
-                "status": "online",
-                "since": 0,
-                "afk": false
-            },
+            }
         }
     })
     .to_string();

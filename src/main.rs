@@ -60,6 +60,7 @@ async fn main() -> Result<()> {
 
                 DiscordEvent::Ready(ready) => {
                     *bot_id.lock().await = Some(ready.user.id);
+                    _status_tx.send(Status::new(StatusType::Online, "Bricking idiots 🧱")).await.unwrap();
                 }
 
                 DiscordEvent::ReactionAdd(reaction) => {
@@ -85,7 +86,12 @@ async fn main() -> Result<()> {
     let res = tokio::try_join!(bot_task, event_handler);
     match res {
         Err(e) => error!("Shutting down with {:?}", e),
-        _ => info!("Shutting down gracefully"),
+        Ok((bot_res, _handler_res)) => {
+            info!("Shutting down");
+            if let Err(e) = bot_res {
+                error!("{}", e);
+            }
+        }
     }
 
     Ok(())
