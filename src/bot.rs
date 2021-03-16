@@ -90,13 +90,20 @@ impl Bot {
             let state_clone = Arc::clone(&self.state);
             // this task will send all messages from channel to websocket stream
             let sender = tokio::spawn(async move {
-                while let Some(m) = sender_rx.recv().await {
-                    // check if connection is even open before we send something
-                    if state_clone.connecion_open.load(Ordering::SeqCst) {
-                        write.send(m).await?;
-                        debug!("Sent payload");
-                    } else {
-                        return Ok(());
+                while let Some(command) = sender_rx.recv().await {
+                    match command {
+                        SenderCommand::Message(m) => {
+                            // check if connection is even open before we send something
+                            if state_clone.connecion_open.load(Ordering::SeqCst) {
+                                write.send(m).await?;
+                                debug!("Sent payload");
+                            } else {
+                                return Ok(());
+                            }
+                        }
+                        SenderCommand::Close => {
+                            return Ok(());
+                        }
                     }
                 }
                 Ok::<(), tokio_tungstenite::tungstenite::error::Error>(())
@@ -115,12 +122,12 @@ impl Bot {
                             "op": Opcode::PresenceUpdate,
                             "d": new_state
                         });
-                        sender_tx_clone.send(Message::text(json.to_string())).await?;
+                        sender_tx_clone.send(SenderCommand::Message(Message::text(json.to_string()))).await?;
                     } else {
-                        return Ok::<_, SendError<Message>>(state_rx);
+                        return Ok::<_, SendError<SenderCommand>>(state_rx);
                     }
                 }
-                Ok::<_, SendError<Message>>(state_rx)
+                Ok::<_, SendError<SenderCommand>>(state_rx)
             });
 
             let heartbeater: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::new(Mutex::new(None));
@@ -157,6 +164,8 @@ impl Bot {
                         MessageParseResult::Ignored => return,
                         MessageParseResult::Err(err) => {
                             error!("{}", err);
+                            heartbeater.lock().await.as_mut().unwrap().abort();
+                            sender_tx.send(SenderCommand::Close).await.unwrap();
                             return;
                         }
                     };
@@ -256,7 +265,7 @@ impl Bot {
         payload: Payload,
         state: Arc<State>,
         event_tx: Sender<DiscordEvent>,
-        sender_tx: Sender<Message>,
+        sender_tx: Sender<SenderCommand>,
         token: String,
         heartbeater: Arc<Mutex<Option<JoinHandle<()>>>>,
     ) -> Result<(), BotError> {
@@ -270,7 +279,7 @@ impl Bot {
                     "op": Opcode::Heartbeat,
                     "d": state.sequence_number.load(Ordering::SeqCst)
                 });
-                sender_tx.send(Message::text(hb_message.to_string())).await.unwrap();
+                sender_tx.send(SenderCommand::Message(Message::text(hb_message.to_string()))).await.unwrap();
             }
             Opcode::Reconnect => {
                 // try resuming connection
@@ -288,7 +297,7 @@ impl Bot {
                     })
                 };
 
-                sender_tx.send(Message::Text(resume.to_string())).await.unwrap();
+                sender_tx.send(SenderCommand::Message(Message::Text(resume.to_string()))).await.unwrap();
                 state.identified.store(true, Ordering::SeqCst);
             }
             Opcode::InvalidSession => {
@@ -303,7 +312,7 @@ impl Bot {
 
                 // try new identification
                 let identify_message = create_identify_message(&token);
-                sender_tx.send(identify_message).await.unwrap();
+                sender_tx.send(SenderCommand::Message(identify_message)).await.unwrap();
                 state.identified.store(true, Ordering::SeqCst);
             }
             Opcode::Hello => {
@@ -320,7 +329,7 @@ impl Bot {
                             "op": Opcode::Heartbeat,
                             "d": state.sequence_number.load(Ordering::SeqCst)
                         });
-                        let send_res = sender_tx.send(Message::text(hb_message.to_string())).await;
+                        let send_res = sender_tx.send(SenderCommand::Message(Message::text(hb_message.to_string()))).await;
                         if let Err(_) = send_res {
                             error!("Channel for sending commands closed.");
                             return;
@@ -333,7 +342,7 @@ impl Bot {
                 // on first ack send identify event
                 if !state.identified.load(Ordering::SeqCst) {
                     let identify_message = create_identify_message(&token);
-                    sender_tx.send(identify_message).await.unwrap();
+                    sender_tx.send(SenderCommand::Message(identify_message)).await.unwrap();
                     state.identified.store(true, Ordering::SeqCst);
                 }
             }
@@ -424,7 +433,11 @@ fn get_payload_from_ws_message(message: Message, state: &Arc<State>) -> MessageP
             state.connecion_open.store(false, Ordering::SeqCst);
             info!("Connection closed");
             if let Some(frame) = frame {
-                Err(Cow::from(format!("Error {}: {}", frame.code, frame.reason)))
+                if frame.reason.is_empty() {
+                    Err(Cow::from(format!("Websocket error {}", frame.code)))
+                } else {
+                    Err(Cow::from(format!("Websocket error {}: {}", frame.code, frame.reason)))
+                }
             } else {
                 Ignored
             }
@@ -432,4 +445,10 @@ fn get_payload_from_ws_message(message: Message, state: &Arc<State>) -> MessageP
         // ignore these
         Message::Ping(_) | Message::Pong(_) => Ignored,
     }
+}
+
+#[derive(Debug)]
+enum SenderCommand {
+    Message(Message),
+    Close,
 }
