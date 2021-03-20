@@ -56,6 +56,14 @@ command = "!brick" # bot will respond to this command
 
 ## Changelog
 
+## v0.4
+
+- Added support for interactions, reactions
+- Added waiting between unsuccessful attempts to connect
+- Muplitple bug-fixes
+- Better logging info
+- Cleaner internal structure
+
 ## v0.3
 
 - Bot client is now separate from brick-bot functionality and can be reused for different bots
