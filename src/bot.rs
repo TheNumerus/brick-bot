@@ -22,8 +22,8 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::{
     structs::{
-        DiscordEvent, Interaction, Message as DiscordMessage, MessageDeleteResponse, Opcode, Payload, ReactionAddResponse, ReactionRemoveResponse, Ready,
-        Status,
+        DiscordEvent, Interaction, Message as DiscordMessage, MessageDeleteResponse, MessageUpdateResponse, Opcode, Payload, ReactionAddResponse,
+        ReactionRemoveResponse, Ready, Status,
     },
     BotError,
 };
@@ -74,13 +74,25 @@ impl Bot {
         // start state changer
         let state_rx = Arc::new(Mutex::new(self.status_rx.take().unwrap()));
 
+        let mut retry_pause = Duration::from_secs(5);
+
         // will enter enother iteration only when discord needs another connection
         loop {
             let (sender_tx, mut sender_rx) = tokio::sync::mpsc::channel(10);
 
-            let (ws_stream, _ws_res) = tokio_tungstenite::connect_async("wss://gateway.discord.gg/?v=8&encoding=json")
-                .await
-                .map_err(|_e| BotError::InternalError(String::from("Failed to connect to Discord servers.")))?;
+            let conn_result = tokio_tungstenite::connect_async("wss://gateway.discord.gg/?v=8&encoding=json").await;
+
+            let (ws_stream, _ws_res) = match conn_result {
+                Ok((a, b)) => (a, b),
+                Err(_) => {
+                    error!("Failed to connect to Discord servers.");
+                    info!("Trying again in {} seconds", retry_pause.as_secs());
+                    tokio::time::sleep(retry_pause.clone()).await;
+                    retry_pause *= 2;
+                    continue;
+                }
+            };
+            retry_pause = Duration::from_secs(5);
             info!("WebSocket connected");
 
             let (mut write, mut read) = ws_stream.split();
@@ -224,7 +236,7 @@ impl Bot {
                 event_tx.send(DiscordEvent::MessageCreate(message)).await.unwrap();
             }
             "MESSAGE_UPDATE" => {
-                let message: DiscordMessage = payload_data_to_exact_type(data, &event_name)?;
+                let message: MessageUpdateResponse = payload_data_to_exact_type(data, &event_name)?;
                 event_tx.send(DiscordEvent::MessageUpdate(message)).await.unwrap();
             }
             "MESSAGE_DELETE" => {

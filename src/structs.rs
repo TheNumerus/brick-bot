@@ -117,7 +117,7 @@ pub struct Ready {
 #[derive(Debug, Clone)]
 pub enum DiscordEvent {
     MessageCreate(Message),
-    MessageUpdate(Message),
+    MessageUpdate(MessageUpdateResponse),
     MessageDelete(MessageDeleteResponse),
     Ready(Ready),
     InteractionCreate(Interaction),
@@ -130,6 +130,17 @@ pub struct MessageDeleteResponse {
     pub id: String,
     pub channel_id: String,
     pub guild_id: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct MessageUpdateResponse {
+    pub id: String,
+    pub channel_id: String,
+    pub content: Option<String>,
+    pub mentions: Option<Vec<User>>,
+    pub mention_roles: Option<Vec<String>>,
+    pub author: Option<User>,
+    pub reactions: Option<Vec<Reaction>>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
