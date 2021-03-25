@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use brick_bot::{
     rest::*,
-    structs::{DiscordResult, Message, ReactionAddResponse, User},
+    structs::{Message, ReactionAddResponse, User},
     AvatarCache, BotError,
 };
 
@@ -37,7 +37,11 @@ pub async fn on_message_create(
     };
 
     if message.content.to_lowercase().contains("čtvrtek") && message.author.id != bot_id {
-        let res = send_reply(&client, &message.channel_id, &message.id, "posere tě krtek", &config.token).await?;
+        let res = NewMessageBuilder::new(&client, &config.token, &message.channel_id)
+            .message("posere tě krtek")
+            .reply_to(&message.id)
+            .send()
+            .await?;
         Result::from(res)?;
         info!("Pooped {}", message.author.username);
         return Ok(());
@@ -52,13 +56,21 @@ pub async fn on_message_create(
         if message.mentions.is_empty() {
             match message.mention_roles {
                 Some(ref roles) if !roles.is_empty() => {
-                    let res = send_reply(&client, &message.channel_id, &message.id, &config.err_msg_tag_role.clone(), &config.token).await?;
-                    Result::from(res)?;
+                    let reply_response = NewMessageBuilder::new(&client, &config.token, &message.channel_id)
+                        .message(&config.err_msg_tag_role)
+                        .reply_to(&message.id)
+                        .send()
+                        .await?;
+                    Result::from(reply_response)?;
                     info!("Error - tagged role");
                 }
                 _ => {
-                    let res = send_reply(&client, &message.channel_id, &message.id, &config.err_msg_tag_nobody.clone(), &config.token).await?;
-                    Result::from(res)?;
+                    let reply_response = NewMessageBuilder::new(&client, &config.token, &message.channel_id)
+                        .message(&config.err_msg_tag_nobody)
+                        .reply_to(&message.id)
+                        .send()
+                        .await?;
+                    Result::from(reply_response)?;
                     info!("Error - tagged nobody");
                 }
             }
@@ -68,7 +80,11 @@ pub async fn on_message_create(
         for user in &message.mentions {
             if user.id == bot_id {
                 if let Some(ref self_message) = command.self_tag_message {
-                    send_reply(&client, &message.channel_id, &message.id, self_message, &config.token).await?;
+                    NewMessageBuilder::new(&&client, &config.token, &message.channel_id)
+                        .message(self_message)
+                        .reply_to(&message.id)
+                        .send()
+                        .await?;
                     info!("Command {} used on bot", command_name);
                     continue;
                 }
@@ -76,7 +92,11 @@ pub async fn on_message_create(
 
             let bricked_gif = gen_brick_gif(&gifs_cache, &user, &avatar_cache, &client, &gifs[command_name], config, command).await?;
 
-            let image_res: DiscordResult<Message> = send_image(&client, &message.channel_id, &bricked_gif, command.image_name.clone(), &config.token).await?;
+            let image_res = NewMessageBuilder::new(&client, &config.token, &message.channel_id)
+                .file_with_filename(bricked_gif.to_vec(), &command.image_name)
+                .send()
+                .await?;
+
             Result::from(image_res)?;
             info!("Command \"{}\" used on user \"{}\"", command_name, user.username);
         }
@@ -142,14 +162,10 @@ pub async fn on_reaction_add(
     )
     .await?;
 
-    let image_res: DiscordResult<Message> = send_image(
-        &client,
-        &reaction.channel_id,
-        &bricked_gif,
-        config.commands["brick"].image_name.clone(),
-        &config.token,
-    )
-    .await?;
+    let image_res = NewMessageBuilder::new(&client, &config.token, &reaction.channel_id)
+        .file_with_filename(bricked_gif.to_vec(), &config.commands["brick"].image_name)
+        .send()
+        .await?;
     Result::from(image_res)?;
     info!("Bricked user \"{}\"", message.author.username);
 

@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 use brick_bot::{
     bot::BotBuilder,
     structs::{DiscordEvent, Status, StatusType},
-    AvatarCache, BotError,
+    AvatarCache,
 };
 
 /// Bot config storage and parsing
@@ -55,8 +55,10 @@ async fn main() -> Result<()> {
                     let config = Arc::clone(&config);
 
                     tokio::spawn(async move {
-                        event_handlers::on_message_create(message, &config, client, cache, bot_id, gifs, gif_cache).await?;
-                        Ok::<(), BotError>(())
+                        let event_res = event_handlers::on_message_create(message, &config, client, cache, bot_id, gifs, gif_cache).await;
+                        if let Err(e) = event_res {
+                            error!("{}", e);
+                        }
                     });
                     _status_tx.send(Status::new(StatusType::Online, "🦆 quack")).await.unwrap();
                 }
@@ -76,8 +78,10 @@ async fn main() -> Result<()> {
                     let config = Arc::clone(&config);
 
                     tokio::spawn(async move {
-                        event_handlers::on_reaction_add(reaction, &config, client, cache, bot_id, gifs, gif_cache).await?;
-                        Ok::<(), BotError>(())
+                        let event_res = event_handlers::on_reaction_add(reaction, &config, client, cache, bot_id, gifs, gif_cache).await;
+                        if let Err(e) = event_res {
+                            error!("{}", e);
+                        }
                     });
                 }
 
