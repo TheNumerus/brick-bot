@@ -9,13 +9,17 @@ use tokio::sync::Mutex;
 
 use brick_bot::{
     bot::BotBuilder,
-    config::Config,
     structs::{DiscordEvent, Status, StatusType},
     AvatarCache, BotError,
 };
 
+/// Bot config storage and parsing
+pub mod config;
+use config::Config;
 /// event handlers specific to brick-bot behaviour
 mod event_handlers;
+/// Image editing
+pub mod image_edit;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -27,10 +31,9 @@ async fn main() -> Result<()> {
 
     let config = prepare_config().await?;
     let cache = Arc::new(Mutex::new(AvatarCache::new()));
-    let bricked_cache = Arc::new(Mutex::new(HashMap::new()));
+    let gif_cache = Arc::new(Mutex::new(HashMap::new()));
 
-    let brick_gif = tokio::fs::read(config.image_path.clone()).await.context("cannot find image on given path")?;
-    let brick_gif = Arc::new(brick_gif);
+    let gifs = load_gifs(&config).await?;
 
     let client = Client::new();
 
@@ -45,14 +48,14 @@ async fn main() -> Result<()> {
                 DiscordEvent::MessageCreate(message) => {
                     // clone all needed stuff
                     let cache = Arc::clone(&cache);
-                    let bricked_cache = Arc::clone(&bricked_cache);
+                    let gif_cache = Arc::clone(&gif_cache);
                     let bot_id = Arc::clone(&bot_id);
-                    let brick_gif = Arc::clone(&brick_gif);
+                    let gifs = Arc::clone(&gifs);
                     let client = client.clone();
                     let config = Arc::clone(&config);
 
                     tokio::spawn(async move {
-                        event_handlers::on_message_create(message, &config, client, cache, bot_id, brick_gif, bricked_cache).await?;
+                        event_handlers::on_message_create(message, &config, client, cache, bot_id, gifs, gif_cache).await?;
                         Ok::<(), BotError>(())
                     });
                     _status_tx.send(Status::new(StatusType::Online, "🦆 quack")).await.unwrap();
@@ -66,14 +69,14 @@ async fn main() -> Result<()> {
                 DiscordEvent::ReactionAdd(reaction) => {
                     // clone all needed stuff
                     let cache = Arc::clone(&cache);
-                    let bricked_cache = Arc::clone(&bricked_cache);
+                    let gif_cache = Arc::clone(&gif_cache);
                     let bot_id = Arc::clone(&bot_id);
-                    let brick_gif = Arc::clone(&brick_gif);
+                    let gifs = Arc::clone(&gifs);
                     let client = client.clone();
                     let config = Arc::clone(&config);
 
                     tokio::spawn(async move {
-                        event_handlers::on_reaction_add(reaction, &config, client, cache, bot_id, brick_gif, bricked_cache).await?;
+                        event_handlers::on_reaction_add(reaction, &config, client, cache, bot_id, gifs, gif_cache).await?;
                         Ok::<(), BotError>(())
                     });
                 }
@@ -103,4 +106,18 @@ async fn prepare_config() -> Result<Arc<Config>> {
 
     let config = Arc::new(config);
     Ok(config)
+}
+
+async fn load_gifs(config: &Arc<Config>) -> Result<Arc<HashMap<String, Vec<u8>>>> {
+    let mut gifs = HashMap::new();
+
+    for (name, command) in &config.commands {
+        let gif = tokio::fs::read(command.image_path.clone()).await.context("cannot find image on given path")?;
+
+        gifs.insert(name.to_owned(), gif);
+    }
+
+    //let brick_gif = tokio::fs::read(config.image_path.clone()).await.context("cannot find image on given path")?;
+
+    Ok(Arc::new(gifs))
 }

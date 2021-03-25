@@ -6,22 +6,21 @@ use reqwest::{
 use serde_json::json;
 
 use crate::{
-    config::Config,
     error::BotError,
     structs::{DiscordResult, Message},
 };
 
 /// Sends image to specified channel id
-pub async fn send_image(client: &Client, channel_id: &str, image: &Bytes, config: &Config) -> Result<DiscordResult<Message>, BotError> {
+pub async fn send_image(client: &Client, channel_id: &str, image: &Bytes, image_name: String, token: &str) -> Result<DiscordResult<Message>, BotError> {
     let url = format!("https://discord.com/api/channels/{}/messages", channel_id);
 
     let image_bytes = image.as_ref().to_owned();
 
-    let file_part = Part::bytes(image_bytes).file_name(config.image_name.clone());
+    let file_part = Part::bytes(image_bytes).file_name(image_name);
 
     let form = Form::new().part("file", file_part);
 
-    let token = format!("Bot {}", config.token);
+    let token = format!("Bot {}", token);
 
     client
         .post(&url)
@@ -35,7 +34,7 @@ pub async fn send_image(client: &Client, channel_id: &str, image: &Bytes, config
 }
 
 /// Sends image to specified channel id
-pub async fn send_reply(client: &Client, channel_id: &str, reply_id: &str, reply: &str, config: &Config) -> Result<DiscordResult<Message>, BotError> {
+pub async fn send_reply(client: &Client, channel_id: &str, reply_id: &str, reply: &str, token: &str) -> Result<DiscordResult<Message>, BotError> {
     let url = format!("https://discord.com/api/channels/{}/messages", channel_id);
 
     let json = json!({
@@ -45,7 +44,7 @@ pub async fn send_reply(client: &Client, channel_id: &str, reply_id: &str, reply
          }
     });
 
-    let token = format!("Bot {}", config.token);
+    let token = format!("Bot {}", token);
 
     client
         .post(&url)
@@ -58,12 +57,12 @@ pub async fn send_reply(client: &Client, channel_id: &str, reply_id: &str, reply
         .map_err(|e| e.into())
 }
 
-pub async fn send_message_to_channel(client: &Client, channel_id: &str, message: &str, config: &Config) -> Result<DiscordResult<Message>, BotError> {
+pub async fn send_message_to_channel(client: &Client, channel_id: &str, message: &str, token: &str) -> Result<DiscordResult<Message>, BotError> {
     let url = format!("https://discord.com/api/channels/{}/messages", channel_id);
 
     let json = json!({ "content": message });
 
-    let token = format!("Bot {}", config.token);
+    let token = format!("Bot {}", token);
 
     client
         .post(&url)
@@ -80,7 +79,7 @@ pub async fn send_interaction_response(
     client: &Client,
     interaction_id: &str,
     interaction_token: &str,
-    config: &Config,
+    token: &str,
     reply: Option<&str>,
 ) -> Result<String, BotError> {
     let url = format!("https://discord.com/api/v8/interactions/{}/{}/callback", interaction_id, interaction_token);
@@ -99,7 +98,7 @@ pub async fn send_interaction_response(
         }
     };
 
-    let token = format!("Bot {}", config.token);
+    let token = format!("Bot {}", token);
 
     client
         .post(&url)
@@ -112,9 +111,9 @@ pub async fn send_interaction_response(
         .map_err(|e| e.into())
 }
 
-pub async fn get_message_from_channel(client: &Client, config: &Config, channel_id: &str, message_id: &str) -> Result<DiscordResult<Message>, BotError> {
+pub async fn get_message_from_channel(client: &Client, token: &str, channel_id: &str, message_id: &str) -> Result<DiscordResult<Message>, BotError> {
     let url = format!("https://discord.com/api/channels/{}/messages/{}", channel_id, message_id);
-    let token = format!("Bot {}", config.token);
+    let token = format!("Bot {}", token);
 
     client
         .get(&url)
@@ -126,8 +125,8 @@ pub async fn get_message_from_channel(client: &Client, config: &Config, channel_
         .map_err(|e| e.into())
 }
 
-pub async fn register_commands(client: &Client, config: &Config, command: &serde_json::Value, app_id: &str) -> Result<String, BotError> {
-    let token = format!("Bot {}", config.token);
+pub async fn register_commands(client: &Client, token: &str, command: &serde_json::Value, app_id: &str) -> Result<String, BotError> {
+    let token = format!("Bot {}", token);
 
     let url = format!("https://discord.com/api/applications/{}/commands", app_id);
 

@@ -1,11 +1,11 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use image::{codecs::gif::*, AnimationDecoder, GenericImageView, ImageFormat};
 
-use crate::config::Config;
+use crate::config::{Command, Config};
 
-use crate::error::BotError;
+use brick_bot::BotError;
 
-pub fn brickify_gif(source: &[u8], avatar: &Bytes, config: &Config) -> Result<Bytes, BotError> {
+pub fn brickify_gif(source: &[u8], avatar: &Bytes, config: &Config, command: &Command) -> Result<Bytes, BotError> {
     let avatar = image::load_from_memory_with_format(avatar.as_ref(), ImageFormat::Png)?;
 
     let (max_x, max_y) = avatar.dimensions();
@@ -15,7 +15,7 @@ pub fn brickify_gif(source: &[u8], avatar: &Bytes, config: &Config) -> Result<By
     let mut frames = decoder.into_frames().collect_frames()?;
 
     for (frame_num, frame) in &mut frames.iter_mut().enumerate() {
-        let keyframe = config.keyframes.get(&frame_num.to_string());
+        let keyframe = command.keyframes.get(&frame_num.to_string());
         let (offset_x, offset_y) = if let Some(k) = keyframe { (k.x, k.y) } else { (0, 0) };
         let visible = if let Some(k) = keyframe { k.visible.unwrap_or(true) } else { true };
         let scale = if let Some(k) = keyframe { k.scale.unwrap_or(1.0) } else { 1.0 };
