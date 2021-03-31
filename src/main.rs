@@ -2,6 +2,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
 
+use bytes::Bytes;
+
 use log::{error, info, LevelFilter};
 use reqwest::Client;
 use simple_logger::SimpleLogger;
@@ -30,8 +32,8 @@ async fn main() -> Result<()> {
         .context("Logger could not be enabled")?;
 
     let config = prepare_config().await?;
-    let cache = Arc::new(Mutex::new(AvatarCache::new()));
-    let gif_cache = Arc::new(Mutex::new(HashMap::new()));
+
+    let caches = Caches::new();
 
     let gifs = load_gifs(&config).await?;
 
@@ -47,15 +49,14 @@ async fn main() -> Result<()> {
             match event {
                 DiscordEvent::MessageCreate(message) => {
                     // clone all needed stuff
-                    let cache = Arc::clone(&cache);
-                    let gif_cache = Arc::clone(&gif_cache);
+                    let caches = Arc::clone(&caches);
                     let bot_id = Arc::clone(&bot_id);
                     let gifs = Arc::clone(&gifs);
                     let client = client.clone();
                     let config = Arc::clone(&config);
 
                     tokio::spawn(async move {
-                        let event_res = event_handlers::on_message_create(message, &config, client, cache, bot_id, gifs, gif_cache).await;
+                        let event_res = event_handlers::on_message_create(message, &config, client, caches, bot_id, gifs).await;
                         if let Err(e) = event_res {
                             error!("{}", e);
                         }
@@ -70,15 +71,14 @@ async fn main() -> Result<()> {
 
                 DiscordEvent::ReactionAdd(reaction) => {
                     // clone all needed stuff
-                    let cache = Arc::clone(&cache);
-                    let gif_cache = Arc::clone(&gif_cache);
+                    let caches = Arc::clone(&caches);
                     let bot_id = Arc::clone(&bot_id);
                     let gifs = Arc::clone(&gifs);
                     let client = client.clone();
                     let config = Arc::clone(&config);
 
                     tokio::spawn(async move {
-                        let event_res = event_handlers::on_reaction_add(reaction, &config, client, cache, bot_id, gifs, gif_cache).await;
+                        let event_res = event_handlers::on_reaction_add(reaction, &config, client, caches, bot_id, gifs).await;
                         if let Err(e) = event_res {
                             error!("{}", e);
                         }
@@ -116,12 +116,28 @@ async fn load_gifs(config: &Arc<Config>) -> Result<Arc<HashMap<String, Vec<u8>>>
     let mut gifs = HashMap::new();
 
     for (name, command) in &config.commands {
-        let gif = tokio::fs::read(command.image_path.clone()).await.context("cannot find image on given path")?;
+        let gif = tokio::fs::read(command.image_path.clone())
+            .await
+            .with_context(|| format!("cannot find image {:?} for command {} on given path", command.image_path, name))?;
 
         gifs.insert(name.to_owned(), gif);
     }
 
-    //let brick_gif = tokio::fs::read(config.image_path.clone()).await.context("cannot find image on given path")?;
-
     Ok(Arc::new(gifs))
+}
+
+pub struct Caches {
+    avatars: AvatarCache,
+    gifs: HashMap<(String, String, String), Bytes>,
+}
+
+impl Caches {
+    pub fn new() -> Arc<Mutex<Self>> {
+        let avatars = AvatarCache::new();
+        let gifs = HashMap::new();
+
+        let caches = Self { avatars, gifs };
+
+        Arc::new(Mutex::new(caches))
+    }
 }

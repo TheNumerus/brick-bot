@@ -3,11 +3,12 @@ use std::{collections::HashMap, sync::Arc, time::Instant};
 use brick_bot::{
     rest::*,
     structs::{Message, ReactionAddResponse, User},
-    AvatarCache, BotError,
+    BotError,
 };
 
 use crate::config::{Command, Config};
 use crate::image_edit::brickify_gif;
+use crate::Caches;
 
 use bytes::Bytes;
 use log::{debug, info};
@@ -19,10 +20,9 @@ pub async fn on_message_create(
     message: Message,
     config: &Config,
     client: Client,
-    avatar_cache: Arc<Mutex<AvatarCache>>,
+    caches: Arc<Mutex<Caches>>,
     bot_id: Arc<Mutex<Option<String>>>,
     gifs: Arc<HashMap<String, Vec<u8>>>,
-    gifs_cache: Arc<Mutex<HashMap<(String, String, String), Bytes>>>,
 ) -> Result<(), BotError> {
     // measure handler time
     let start = Instant::now();
@@ -54,26 +54,21 @@ pub async fn on_message_create(
 
         // send error messeage
         if message.mentions.is_empty() {
-            match message.mention_roles {
+            let message_builder = NewMessageBuilder::new(&client, &config.token, &message.channel_id).reply_to(&message.id);
+
+            let message_builder = match message.mention_roles {
                 Some(ref roles) if !roles.is_empty() => {
-                    let reply_response = NewMessageBuilder::new(&client, &config.token, &message.channel_id)
-                        .message(&config.err_msg_tag_role)
-                        .reply_to(&message.id)
-                        .send()
-                        .await?;
-                    Result::from(reply_response)?;
                     info!("Error - tagged role");
+                    message_builder.message(&config.err_msg_tag_role)
                 }
                 _ => {
-                    let reply_response = NewMessageBuilder::new(&client, &config.token, &message.channel_id)
-                        .message(&config.err_msg_tag_nobody)
-                        .reply_to(&message.id)
-                        .send()
-                        .await?;
-                    Result::from(reply_response)?;
                     info!("Error - tagged nobody");
+                    message_builder.message(&config.err_msg_tag_nobody)
                 }
-            }
+            };
+
+            let reply_response = message_builder.send().await?;
+            Result::from(reply_response)?;
         }
 
         // brick everyone mentioned
@@ -90,7 +85,7 @@ pub async fn on_message_create(
                 }
             }
 
-            let bricked_gif = gen_brick_gif(&gifs_cache, &user, &avatar_cache, &client, &gifs[command_name], config, command).await?;
+            let bricked_gif = gen_brick_gif(&caches, &user, &client, &gifs[command_name], config, command).await?;
 
             let image_res = NewMessageBuilder::new(&client, &config.token, &message.channel_id)
                 .file_with_filename(bricked_gif.to_vec(), &command.image_name)
@@ -111,10 +106,9 @@ pub async fn on_reaction_add(
     reaction: ReactionAddResponse,
     config: &Config,
     client: Client,
-    avatar_cache: Arc<Mutex<AvatarCache>>,
+    caches: Arc<Mutex<Caches>>,
     bot_id: Arc<Mutex<Option<String>>>,
     gifs: Arc<HashMap<String, Vec<u8>>>,
-    gifs_cache: Arc<Mutex<HashMap<(String, String, String), Bytes>>>,
 ) -> Result<(), BotError> {
     // measure handler time
     let start = Instant::now();
@@ -151,16 +145,7 @@ pub async fn on_reaction_add(
         return Ok(());
     }
 
-    let bricked_gif = gen_brick_gif(
-        &gifs_cache,
-        &message.author,
-        &avatar_cache,
-        &client,
-        &gifs["brick"],
-        config,
-        &config.commands["brick"],
-    )
-    .await?;
+    let bricked_gif = gen_brick_gif(&caches, &message.author, &client, &gifs["brick"], config, &config.commands["brick"]).await?;
 
     let image_res = NewMessageBuilder::new(&client, &config.token, &reaction.channel_id)
         .file_with_filename(bricked_gif.to_vec(), &config.commands["brick"].image_name)
@@ -175,17 +160,18 @@ pub async fn on_reaction_add(
 }
 
 async fn gen_brick_gif(
-    gifs_cache: &Arc<Mutex<HashMap<(String, String, String), Bytes>>>,
+    caches: &Arc<Mutex<Caches>>,
     user: &User,
-    avatar_cache: &Arc<Mutex<AvatarCache>>,
     client: &Client,
     brick_gif: &Vec<u8>,
     config: &Config,
     command: &Command,
 ) -> Result<Bytes, BotError> {
     let bricked_gif = {
-        let lock = gifs_cache.lock().await;
-        lock.get(&(user.id.to_owned(), user.avatar.to_owned(), command.command.to_owned())).cloned()
+        let lock = caches.lock().await;
+        lock.gifs
+            .get(&(user.id.to_owned(), user.avatar.to_owned(), command.command.to_owned()))
+            .cloned()
     };
     let bricked_gif = match bricked_gif {
         Some(gif) => {
@@ -194,16 +180,17 @@ async fn gen_brick_gif(
         }
         None => {
             let avatar = {
-                let mut lock = avatar_cache.lock().await;
-                let avatar = lock.get(client, &user).await?.clone();
+                let mut lock = caches.lock().await;
+                let avatar = lock.avatars.get(client, &user).await?.clone();
                 avatar
             };
 
             let gif = brickify_gif(&brick_gif, &avatar, &config, &command)?;
 
             {
-                let mut lock = gifs_cache.lock().await;
-                lock.insert((user.id.clone(), user.avatar.clone(), command.command.to_owned()), gif.clone());
+                let mut lock = caches.lock().await;
+                lock.gifs
+                    .insert((user.id.clone(), user.avatar.clone(), command.command.to_owned()), gif.clone());
             }
 
             gif
