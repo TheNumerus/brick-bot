@@ -44,7 +44,7 @@ pub fn brickify_gif(source: &[u8], avatar: &Bytes, config: &Config, command: &Co
         }
     }
 
-    let dest = BytesMut::with_capacity(500 * 1024 * 1024);
+    let dest = BytesMut::with_capacity(2 * 1024 * 1024);
     let mut writer = dest.writer();
 
     {
