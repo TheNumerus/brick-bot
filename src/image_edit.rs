@@ -12,7 +12,7 @@ pub fn brickify_gif(source: &[u8], avatar: &Bytes, config: &Config, command: &Co
 
     let (max_x, max_y) = avatar.dimensions();
 
-    let decoder = GifDecoder::new(source.clone().reader()).unwrap();
+    let decoder = GifDecoder::new(source.reader()).unwrap();
 
     let mut frames = decoder.into_frames().collect_frames()?;
 

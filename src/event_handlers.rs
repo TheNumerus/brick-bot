@@ -73,6 +73,11 @@ pub async fn on_message_create(
 
         // brick everyone mentioned
         for user in &message.mentions {
+            if let Some(msg) = &message.referenced_message {
+                if user.id == msg.author.id {
+                    continue;
+                }
+            }
             if user.id == bot_id {
                 if let Some(ref self_message) = command.self_tag_message {
                     NewMessageBuilder::new(&&client, &config.token, &message.channel_id)
@@ -163,7 +168,7 @@ async fn gen_brick_gif(
     caches: &Arc<Mutex<Caches>>,
     user: &User,
     client: &Client,
-    brick_gif: &Vec<u8>,
+    brick_gif: &[u8],
     config: &Config,
     command: &Command,
 ) -> Result<Bytes, BotError> {

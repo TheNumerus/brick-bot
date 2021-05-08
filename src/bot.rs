@@ -48,7 +48,7 @@ impl BotBuilder {
         let (event_tx, event_rx) = tokio::sync::mpsc::channel(10);
         let (status_tx, status_rx) = tokio::sync::mpsc::channel(10);
         // check for token
-        if let None = self.token {
+        if self.token.is_none() {
             return Err(BotError::InternalError(String::from("Cannot build bot without token.")));
         }
 
@@ -59,6 +59,12 @@ impl BotBuilder {
             state: Arc::new(State::new()),
         };
         Ok((bot, event_rx, status_tx))
+    }
+}
+
+impl Default for BotBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -87,7 +93,7 @@ impl Bot {
                 Err(_) => {
                     error!("Failed to connect to Discord servers.");
                     info!("Trying again in {} seconds", retry_pause.as_secs());
-                    tokio::time::sleep(retry_pause.clone()).await;
+                    tokio::time::sleep(retry_pause).await;
                     retry_pause *= 2;
                     continue;
                 }
@@ -342,7 +348,7 @@ impl Bot {
                             "d": state.sequence_number.load(Ordering::SeqCst)
                         });
                         let send_res = sender_tx.send(SenderCommand::Message(Message::text(hb_message.to_string()))).await;
-                        if let Err(_) = send_res {
+                        if send_res.is_err() {
                             error!("Channel for sending commands closed.");
                             return;
                         }
@@ -394,7 +400,7 @@ impl State {
     }
 }
 
-fn create_identify_message(token: &String) -> Message {
+fn create_identify_message(token: &str) -> Message {
     let identify = json!({
         "op": Opcode::Identify,
         "d": {

@@ -39,6 +39,7 @@ pub struct Message {
     pub mention_roles: Option<Vec<String>>,
     pub author: User,
     pub reactions: Option<Vec<Reaction>>,
+    pub referenced_message: Option<Box<Message>>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -195,11 +196,10 @@ pub struct Status {
 
 impl Status {
     pub fn new(status_type: StatusType, name: impl AsRef<str>) -> Self {
-        let mut activities = Vec::with_capacity(1);
-        activities.push(Activity {
+        let activities = vec![Activity {
             name: String::from(name.as_ref()),
             activity_type: 0,
-        });
+        }];
         Self {
             status: status_type,
             activities: Some(activities),
