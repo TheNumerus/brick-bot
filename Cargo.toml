@@ -22,3 +22,5 @@ tokio-tungstenite = {version="*", features=["tls"]}
 futures-util = "0.3.12"
 log = "0.4"
 simple_logger = "1.11.0"
+chrono = "0.4"
+rand = "0.8"

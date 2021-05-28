@@ -6,9 +6,12 @@ use brick_bot::{
     BotError,
 };
 
-use crate::config::{Command, Config};
 use crate::image_edit::brickify_gif;
 use crate::Caches;
+use crate::{
+    config::{Command, Config},
+    GifKey,
+};
 
 use bytes::Bytes;
 use log::{debug, info};
@@ -175,7 +178,7 @@ async fn gen_brick_gif(
     let bricked_gif = {
         let lock = caches.lock().await;
         lock.gifs
-            .get(&(user.id.to_owned(), user.avatar.to_owned(), command.command.to_owned()))
+            .get(&GifKey::new(user.id.to_owned(), user.avatar.to_owned(), command.command.to_owned()))
             .cloned()
     };
     let bricked_gif = match bricked_gif {
@@ -195,7 +198,7 @@ async fn gen_brick_gif(
             {
                 let mut lock = caches.lock().await;
                 lock.gifs
-                    .insert((user.id.clone(), user.avatar.clone(), command.command.to_owned()), gif.clone());
+                    .insert(GifKey::new(user.id.clone(), user.avatar.clone(), command.command.to_owned()), gif.clone());
             }
 
             gif

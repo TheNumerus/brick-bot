@@ -4,6 +4,8 @@ use anyhow::{Context, Result};
 
 use bytes::Bytes;
 
+use chrono::prelude::*;
+
 use log::{error, info, LevelFilter};
 use reqwest::Client;
 use simple_logger::SimpleLogger;
@@ -39,7 +41,7 @@ async fn main() -> Result<()> {
 
     let client = Client::new();
 
-    let (mut bot, mut event_rx, _status_tx) = BotBuilder::new().token(config.token.clone()).build()?;
+    let (mut bot, mut event_rx, status_tx) = BotBuilder::new(config.token.as_str()).build()?;
     let bot_task = tokio::spawn(async move { bot.run().await });
 
     let bot_id = Arc::new(Mutex::new(None));
@@ -61,12 +63,12 @@ async fn main() -> Result<()> {
                             error!("{}", e);
                         }
                     });
-                    _status_tx.send(Status::new(StatusType::Online, "🦆 quack")).await.unwrap();
+                    status_tx.send(Status::new(StatusType::Online, select_message())).await.unwrap();
                 }
 
                 DiscordEvent::Ready(ready) => {
                     *bot_id.lock().await = Some(ready.user.id);
-                    _status_tx.send(Status::new(StatusType::Online, "Bricking idiots 🧱")).await.unwrap();
+                    status_tx.send(Status::new(StatusType::Online, select_message())).await.unwrap();
                 }
 
                 DiscordEvent::ReactionAdd(reaction) => {
@@ -126,9 +128,38 @@ async fn load_gifs(config: &Arc<Config>) -> Result<Arc<HashMap<String, Vec<u8>>>
     Ok(Arc::new(gifs))
 }
 
+fn select_message() -> &'static str {
+    let now = Local::now();
+    let num = rand::random::<u32>();
+
+    match num % 1000 {
+        0 => "THE GAME",
+        1 => "opli je debílek",
+        2 => "to mu je teda",
+        _ => match now.weekday() {
+            Weekday::Wed => "it's wednesday my dudes",
+            Weekday::Thu => "posere tě krtek",
+            _ => "with 🧱",
+        },
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct GifKey {
+    pub user: String,
+    pub avatar_id: String,
+    pub command: String,
+}
+
+impl GifKey {
+    pub fn new(user: String, avatar_id: String, command: String) -> Self {
+        Self { user, avatar_id, command }
+    }
+}
+
 pub struct Caches {
     avatars: AvatarCache,
-    gifs: HashMap<(String, String, String), Bytes>,
+    gifs: HashMap<GifKey, Bytes>,
 }
 
 impl Caches {

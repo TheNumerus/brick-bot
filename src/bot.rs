@@ -29,42 +29,28 @@ use crate::{
 };
 
 pub struct BotBuilder {
-    token: Option<String>,
+    token: String,
 }
 
 impl BotBuilder {
-    pub fn new() -> Self {
-        Self { token: None }
-    }
-
-    /// Sets token fot bot to use
-    pub fn token(&mut self, token: String) -> &mut Self {
-        self.token = Some(token);
-        self
+    pub fn new<S: AsRef<str>>(token: S) -> Self {
+        Self {
+            token: token.as_ref().to_owned(),
+        }
     }
 
     /// Builds [`Bot`]
-    pub fn build(&self) -> Result<(Bot, Receiver<DiscordEvent>, Sender<Status>), BotError> {
+    pub fn build(self) -> Result<(Bot, Receiver<DiscordEvent>, Sender<Status>), BotError> {
         let (event_tx, event_rx) = tokio::sync::mpsc::channel(10);
         let (status_tx, status_rx) = tokio::sync::mpsc::channel(10);
-        // check for token
-        if self.token.is_none() {
-            return Err(BotError::InternalError(String::from("Cannot build bot without token.")));
-        }
 
         let bot = Bot {
             event_tx,
             status_rx: Some(status_rx),
-            token: self.token.as_ref().unwrap().clone(),
+            token: self.token,
             state: Arc::new(State::new()),
         };
         Ok((bot, event_rx, status_tx))
-    }
-}
-
-impl Default for BotBuilder {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -86,7 +72,7 @@ impl Bot {
         loop {
             let (sender_tx, mut sender_rx) = tokio::sync::mpsc::channel(10);
 
-            let conn_result = tokio_tungstenite::connect_async("wss://gateway.discord.gg/?v=8&encoding=json").await;
+            let conn_result = tokio_tungstenite::connect_async("wss://gateway.discord.gg/?v=9&encoding=json").await;
 
             let (ws_stream, _ws_res) = match conn_result {
                 Ok((a, b)) => (a, b),
