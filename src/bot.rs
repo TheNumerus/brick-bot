@@ -8,7 +8,7 @@ use std::{
 };
 
 use futures_util::{SinkExt, StreamExt};
-use log::{debug, error, info};
+use tracing::{debug, error, info};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use tokio::{
@@ -80,7 +80,7 @@ impl Bot {
                     error!("Failed to connect to Discord servers.");
                     info!("Trying again in {} seconds", retry_pause.as_secs());
                     tokio::time::sleep(retry_pause).await;
-                    retry_pause *= 2;
+                    retry_pause = Duration::from_secs(300).min(retry_pause * 2);
                     continue;
                 }
             };
@@ -254,6 +254,10 @@ impl Bot {
             "MESSAGE_REACTION_REMOVE" => {
                 let reaction: ReactionRemoveResponse = payload_data_to_exact_type(data, &event_name)?;
                 event_tx.send(DiscordEvent::ReactionRemove(reaction)).await.unwrap();
+            }
+            "APPLICATION_COMMAND_UPDATE" | "APPLICATION_COMMAND_CREATE" | "APPLICATION_COMMAND_DELETE" => {
+                //TODO do something
+                return Ok(());
             }
             // add more events as needed
             _ => {

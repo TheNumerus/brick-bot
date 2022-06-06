@@ -3,11 +3,11 @@ use std::collections::HashMap;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use image::{codecs::gif::*, AnimationDecoder, GenericImageView, ImageFormat};
 
-use crate::config::{Command, Config, Keyframe};
+use crate::config::{Config, Keyframe, GifReplyConfig};
 
 use brick_bot::BotError;
 
-pub fn brickify_gif(source: &[u8], avatar: &Bytes, config: &Config, command: &Command) -> Result<Bytes, BotError> {
+pub fn brickify_gif(source: &[u8], avatar: &Bytes, config: &Config, gif_config: &GifReplyConfig) -> Result<Bytes, BotError> {
     let avatar = image::load_from_memory_with_format(avatar.as_ref(), ImageFormat::Png)?;
 
     let (max_x, max_y) = avatar.dimensions();
@@ -17,15 +17,15 @@ pub fn brickify_gif(source: &[u8], avatar: &Bytes, config: &Config, command: &Co
     let mut frames = decoder.into_frames().collect_frames()?;
 
     for (frame_num, frame) in &mut frames.iter_mut().enumerate() {
-        let interpolated = InterpolatedKeyframe::from_keyframes(&command.keyframes, frame_num);
+        let interpolated = InterpolatedKeyframe::from_keyframes(&gif_config.keyframes, frame_num);
 
         if !interpolated.visible {
             continue;
         }
 
         for (x, y, pixel) in frame.buffer_mut().enumerate_pixels_mut() {
-            let mapped_x = ((x - interpolated.x) as f32 / interpolated.scale) as u32;
-            let mapped_y = ((y - interpolated.y) as f32 / interpolated.scale) as u32;
+            let mapped_x = ((x.overflowing_sub(interpolated.x).0) as f32 / interpolated.scale) as u32;
+            let mapped_y = ((y.overflowing_sub(interpolated.y).0) as f32 / interpolated.scale) as u32;
 
             let pixel_in_frame = (mapped_x > 0) && (mapped_x < max_x) && (mapped_y > 0) && (mapped_y < max_y);
 

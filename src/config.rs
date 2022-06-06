@@ -47,9 +47,33 @@ mod defaults {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct Command {
-    /// Main command to listen to
-    pub command: String,
+pub enum KeywordPosition {
+    #[serde(rename = "start")]
+    Start,
+    #[serde(rename = "everywhere")]
+    Everywhere,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct ReplyConfig {
+    /// Where to search for keyword
+    pub position: KeywordPosition,
+    /// Keyword for command execution
+    pub keyword: String,
+    /// Text of reply message
+    pub reply: String,
+    /// Whitelist of users to reply to
+    pub whitelist: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct GifReplyConfig {
+    /// Where to search for keyword
+    pub position: KeywordPosition,
+    /// Keyword for command execution
+    pub keyword: String,
+    /// Optional reaction activation
+    pub emoji: Option<String>,
     /// Path to brick gif to use
     pub image_path: PathBuf,
     /// If `Some`, bot will respond with this message if mentioned
@@ -59,4 +83,13 @@ pub struct Command {
     pub image_name: String,
     /// Keyframes for avatar animation
     pub keyframes: HashMap<String, Keyframe>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(tag = "kind")]
+pub enum Command {
+    #[serde(rename = "reply")]
+    Reply(ReplyConfig),
+    #[serde(rename = "gif_reply")]
+    GifReply(GifReplyConfig),
 }

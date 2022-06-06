@@ -1,8 +1,4 @@
 /target
 bot.toml
-tenor.gif
-bonk.gif
-
+assets/*.gif
 .vscode/
-
-comedy.gif

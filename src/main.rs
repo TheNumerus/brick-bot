@@ -6,10 +6,9 @@ use bytes::Bytes;
 
 use chrono::prelude::*;
 
-use log::{error, info, LevelFilter};
 use reqwest::Client;
-use simple_logger::SimpleLogger;
 use tokio::sync::Mutex;
+use tracing::{error, info};
 
 use brick_bot::{
     bot::BotBuilder,
@@ -19,7 +18,8 @@ use brick_bot::{
 
 /// Bot config storage and parsing
 pub mod config;
-use config::Config;
+use config::{Command, Config};
+use tracing_subscriber::{fmt::format::FmtSpan, prelude::__tracing_subscriber_SubscriberExt, EnvFilter};
 /// event handlers specific to brick-bot behaviour
 mod event_handlers;
 /// Image editing
@@ -27,11 +27,7 @@ pub mod image_edit;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    SimpleLogger::new()
-        .with_level(LevelFilter::Warn)
-        .with_module_level("brick_bot", LevelFilter::Info)
-        .init()
-        .context("Logger could not be enabled")?;
+    init_tracing();
 
     let config = prepare_config().await?;
 
@@ -44,7 +40,7 @@ async fn main() -> Result<()> {
     let (mut bot, mut event_rx, status_tx) = BotBuilder::new(config.token.as_str()).build()?;
     let bot_task = tokio::spawn(async move { bot.run().await });
 
-    let bot_id = Arc::new(Mutex::new(None));
+    let bot_id: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
     let event_handler = tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
@@ -52,13 +48,20 @@ async fn main() -> Result<()> {
                 DiscordEvent::MessageCreate(message) => {
                     // clone all needed stuff
                     let caches = Arc::clone(&caches);
-                    let bot_id = Arc::clone(&bot_id);
                     let gifs = Arc::clone(&gifs);
                     let client = client.clone();
                     let config = Arc::clone(&config);
 
+                    let bot_id = match *bot_id.lock().await {
+                        Some(ref id) => id.to_owned(),
+                        None => {
+                            error!("Bot id not set");
+                            return;
+                        },
+                    };
+
                     tokio::spawn(async move {
-                        let event_res = event_handlers::on_message_create(message, &config, client, caches, bot_id, gifs).await;
+                        let event_res = event_handlers::on_message_create(message, &config, client, caches, &bot_id, gifs).await;
                         if let Err(e) = event_res {
                             error!("{}", e);
                         }
@@ -74,13 +77,20 @@ async fn main() -> Result<()> {
                 DiscordEvent::ReactionAdd(reaction) => {
                     // clone all needed stuff
                     let caches = Arc::clone(&caches);
-                    let bot_id = Arc::clone(&bot_id);
                     let gifs = Arc::clone(&gifs);
                     let client = client.clone();
                     let config = Arc::clone(&config);
 
+                    let bot_id = match *bot_id.lock().await {
+                        Some(ref id) => id.to_owned(),
+                        None => {
+                            error!("Bot id not set");
+                            return;
+                        },
+                    };
+
                     tokio::spawn(async move {
-                        let event_res = event_handlers::on_reaction_add(reaction, &config, client, caches, bot_id, gifs).await;
+                        let event_res = event_handlers::on_reaction_add(reaction, &config, client, caches, &bot_id, gifs).await;
                         if let Err(e) = event_res {
                             error!("{}", e);
                         }
@@ -118,11 +128,13 @@ async fn load_gifs(config: &Arc<Config>) -> Result<Arc<HashMap<String, Vec<u8>>>
     let mut gifs = HashMap::new();
 
     for (name, command) in &config.commands {
-        let gif = tokio::fs::read(command.image_path.clone())
-            .await
-            .with_context(|| format!("cannot find image {:?} for command {} on given path", command.image_path, name))?;
+        if let Command::GifReply(ref config) = command {
+            let gif = tokio::fs::read(config.image_path.clone())
+                .await
+                .with_context(|| format!("cannot find image {:?} for command {} on given path", config.image_path, name))?;
 
-        gifs.insert(name.to_owned(), gif);
+            gifs.insert(name.to_owned(), gif);
+        }
     }
 
     Ok(Arc::new(gifs))
@@ -142,6 +154,16 @@ fn select_message() -> &'static str {
             _ => "with 🧱",
         },
     }
+}
+
+fn init_tracing() {
+    let filter = EnvFilter::new("brick_bot=INFO");
+
+    let console_logger = tracing_subscriber::fmt().with_span_events(FmtSpan::NEW | FmtSpan::CLOSE).finish();
+
+    let subscriber = console_logger.with(filter);
+
+    tracing::subscriber::set_global_default(subscriber).unwrap();
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
