@@ -62,17 +62,19 @@ pub struct Bot {
 }
 
 impl Bot {
+    pub const VERSION: u32 = 10;
+
     pub async fn run(&mut self) -> Result<(), BotError> {
         // start state changer
         let state_rx = Arc::new(Mutex::new(self.status_rx.take().unwrap()));
 
         let mut retry_pause = Duration::from_secs(5);
 
-        // will enter enother iteration only when discord needs another connection
+        // will enter another iteration only when discord needs another connection
         loop {
             let (sender_tx, mut sender_rx) = tokio::sync::mpsc::channel(10);
 
-            let conn_result = tokio_tungstenite::connect_async("wss://gateway.discord.gg/?v=9&encoding=json").await;
+            let conn_result = tokio_tungstenite::connect_async(format!("wss://gateway.discord.gg/?v={}&encoding=json", Self::VERSION)).await;
 
             let (ws_stream, _ws_res) = match conn_result {
                 Ok((a, b)) => (a, b),
@@ -168,7 +170,9 @@ impl Bot {
                         MessageParseResult::Ignored => return,
                         MessageParseResult::Err(err) => {
                             error!("{}", err);
-                            heartbeater.lock().await.as_mut().unwrap().abort();
+                            if let Some(hb) = heartbeater.lock().await.as_mut() {
+                                hb.abort();
+                            }
                             sender_tx.send(SenderCommand::Close).await.unwrap();
                             return;
                         }
@@ -216,11 +220,11 @@ impl Bot {
         } = payload;
 
         // update seq number
-        let seq_num = seq_num.ok_or_else(|| BotError::ApiError(String::from("recieved event without sequence number")))?;
+        let seq_num = seq_num.ok_or_else(|| BotError::ApiError(String::from("Received event without sequence number")))?;
         state.sequence_number.store(seq_num, Ordering::SeqCst);
 
-        let event_name = event_name.ok_or_else(|| BotError::ApiError(String::from("recieved event without name")))?;
-        debug!("Recieved event \"{}\"", event_name);
+        let event_name = event_name.ok_or_else(|| BotError::ApiError(String::from("Received event without name")))?;
+        debug!("Received event \"{}\"", event_name);
 
         match event_name.as_str() {
             "MESSAGE_CREATE" => {
@@ -261,7 +265,7 @@ impl Bot {
             }
             // add more events as needed
             _ => {
-                info!("Recieved unsupported event {}", event_name);
+                info!("Received unsupported event {}", event_name);
                 return Ok(());
             }
         }

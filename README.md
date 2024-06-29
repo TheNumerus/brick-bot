@@ -56,6 +56,11 @@ command = "!brick" # bot will respond to this command
 
 ## Changelog
 
+## v0.4.1
+
+- Fix panic on aborted heartbeater thread
+- Fixed typos
+
 ## v0.4
 
 - Added support for interactions, reactions
